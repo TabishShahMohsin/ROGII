@@ -1,0 +1,21 @@
+name: rogii-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - jupyterlab
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - numba
+  - joblib
+  - pip:
+      - lightgbm
+      - xgboost
+      - catboost
+      - koolbox      # Frequently used in public kernels for this competition

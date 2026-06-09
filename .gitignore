@@ -1,3 +1,8 @@
+data/
+videos/
+anaconda_projects/
+.virtual_documents/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
