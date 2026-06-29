@@ -62,7 +62,7 @@ evalz['GR'] = remove_rotation_noise(evalz['GR'], cutoff=HW_LOW_PASS_CUTOFF)
 evalz['dZ-bl'] = d(evalz['Z-bl'])
 
 
-# --- 2. THE STANDALONE MATPLOTLIB APPLICATION ---
+# --- 2. THE STANDALONE MATPLOTLIB APPLICATION (INTERP / MD PERSPECTIVE) ---
 class StarSteerSimulator:
     def __init__(self, evalz, tw):
         self.evalz = evalz.copy()
@@ -80,12 +80,16 @@ class StarSteerSimulator:
         self.fig, self.ax = plt.subplots(figsize=(15, 8))
         plt.subplots_adjust(bottom=0.35) # Leave bottom space for UI widgets
         
-        # Setup Initial Plot Lines
-        self.line_tw, = self.ax.plot(self.tw['TVT'], self.tw['GR'], label='Reference (TW)', color='black', linewidth=1.5)
-        self.line_geo, = self.ax.plot(self.evalz['TVT'], self.evalz['GR'], label='Geologist (HW)', color='green', alpha=0.3, linewidth=2)
+        # --- Setup Initial Plot Lines (MD vs GR Perspective) ---
+        # 1. Sensed HW
+        self.line_sensed, = self.ax.plot(self.evalz['MD'], self.evalz['GR'], label='Sensed HW GR', color='black', linewidth=1.5)
         
-        # Active Chunk placeholders (empty to start)
-        self.line_pred, = self.ax.plot([], [], color='dodgerblue', linewidth=2, label='Active Predicted Chunk')
+        # 2. Geologist Truth (TW mapped via original HW TVT)
+        truth_gr_full = np.interp(self.evalz['TVT'], self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
+        self.line_geo, = self.ax.plot(self.evalz['MD'], truth_gr_full, label='Truth (TW via Geo TVT)', color='green', alpha=0.3, linewidth=2)
+        
+        # 3. Active Chunk placeholders (empty to start)
+        self.line_pred, = self.ax.plot([], [], color='dodgerblue', linewidth=2, label='Predicted TW Mapping')
         self.scatter_anchor, = self.ax.plot([], [], 'go', markersize=8, label='Current Anchor')
         
         self.history_lines = []
@@ -93,17 +97,16 @@ class StarSteerSimulator:
         
         # Format Graph
         self.ax.set_title("Interactive Geosteering | Initializing...", fontsize=14, fontweight='bold')
-        self.ax.set_xlabel("True Vertical Thickness (TVT)", fontsize=12)
+        self.ax.set_xlabel("Measured Depth (MD)", fontsize=12)
         self.ax.set_ylabel("Gamma Ray (API)", fontsize=12)
         
-        min_tvt, max_tvt = self.evalz['TVT'].min(), self.evalz['TVT'].max()
-        self.ax.set_xlim(min_tvt - 17, max_tvt + 17)
+        min_md, max_md = self.evalz['MD'].min(), self.evalz['MD'].max()
+        self.ax.set_xlim(min_md - 50, max_md + 50)
         self.ax.legend(loc='upper right')
         self.ax.grid(True, alpha=0.3)
         
         # --- Create Widgets ---
         axcolor = 'lightgoldenrodyellow'
-        max_md = self.evalz['MD'].max()
         initial_end = min(self.current_md_start + 200, max_md)
         
         # Sliders (MD, m, c)
@@ -112,8 +115,8 @@ class StarSteerSimulator:
         self.ax_c = plt.axes([0.15, 0.12, 0.65, 0.03], facecolor=axcolor)
         
         self.slider_md = Slider(self.ax_md, 'Active MD End', self.current_md_start + 1, max_md, valinit=initial_end, valstep=5)
-        self.slider_m = Slider(self.ax_m, 'm (Apparent Dip)', -0.5, 0.5, valinit=0.0, valstep=0.001)
-        self.slider_c = Slider(self.ax_c, 'c (Fault Offset)', -50.0, 50.0, valinit=0.0, valstep=0.1)
+        self.slider_m = Slider(self.ax_m, 'm (Apparent Dip)', -0.05, 0.05, valinit=0.0, valstep=0.001)
+        self.slider_c = Slider(self.ax_c, 'c (Fault Offset)', -5.0, 5.0, valinit=0.0, valstep=0.1)
         
         # Buttons (Commit, Reset)
         self.ax_commit = plt.axes([0.15, 0.03, 0.15, 0.05])
@@ -123,8 +126,8 @@ class StarSteerSimulator:
         self.btn_reset = Button(self.ax_reset, 'Reset All', color='salmon', hovercolor='lightsalmon')
         
         # Checkboxes (Toggles)
-        self.ax_toggles = plt.axes([0.55, 0.02, 0.25, 0.08], frameon=False)
-        self.toggles = CheckButtons(self.ax_toggles, ['Show Geologist TVT', 'Show Predicted TVT'], [True, True])
+        self.ax_toggles = plt.axes([0.55, 0.02, 0.35, 0.08], frameon=False)
+        self.toggles = CheckButtons(self.ax_toggles, ['Show Geologist Mapping', 'Show Predicted Mapping'], [True, True])
         
         # Bind Events
         self.slider_md.on_changed(self.update_plot)
@@ -139,10 +142,9 @@ class StarSteerSimulator:
         plt.show() # This launches the native Python desktop window!
         
     def toggle_visibility(self, label):
-        if label == 'Show Geologist TVT':
+        if label == 'Show Geologist Mapping':
             self.line_geo.set_visible(not self.line_geo.get_visible())
-        elif label == 'Show Predicted TVT':
-            # Toggle visibility for both active predicted line AND historical chunks
+        elif label == 'Show Predicted Mapping':
             vis = not self.line_pred.get_visible()
             self.line_pred.set_visible(vis)
             self.scatter_anchor.set_visible(vis)
@@ -152,35 +154,22 @@ class StarSteerSimulator:
                 anchor.set_visible(vis)
         self.fig.canvas.draw_idle()
 
-    def _calculate_metrics(self, tvt_series, gr_series):
-        """Helper to calculate Correlation and RMSE in TVT space"""
-        if len(tvt_series) == 0:
+    def _calculate_metrics(self, sensed_gr, pred_gr):
+        """Helper to calculate Correlation and RMSE directly on MD grid"""
+        if len(sensed_gr) == 0:
             return 0.0, 0.0
             
-        clean_tvt = tvt_series.reset_index(drop=True)
-        clean_gr = gr_series.reset_index(drop=True)
+        s_gr = np.array(sensed_gr)
+        p_gr = np.array(pred_gr)
         
-        # Sort for interpolation (fixes porpoising mapping logic for metrics)
-        sort_idx = np.argsort(clean_tvt)
-        sorted_tvt = clean_tvt.iloc[sort_idx]
-        sorted_gr = clean_gr.iloc[sort_idx]
-        
-        min_t, max_t = sorted_tvt.min(), sorted_tvt.max()
+        valid = ~np.isnan(s_gr) & ~np.isnan(p_gr)
         corr, rmse = 0.0, 0.0
         
-        if abs(max_t - min_t) > 0.1:
-            # Sample the TVT span dynamically
-            eval_t = np.linspace(min_t, max_t, max(10, int(abs(max_t - min_t)/0.5)))
-            
-            hw_interp = np.interp(eval_t, sorted_tvt, sorted_gr)
-            tw_interp = np.interp(eval_t, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
-            
-            valid = ~np.isnan(hw_interp) & ~np.isnan(tw_interp)
-            if np.sum(valid) > 5:
-                rmse = np.sqrt(np.mean((hw_interp[valid] - tw_interp[valid])**2))
-                if np.std(hw_interp[valid]) > 1e-5 and np.std(tw_interp[valid]) > 1e-5:
-                    corr, _ = pearsonr(hw_interp[valid], tw_interp[valid])
-                    
+        if np.sum(valid) > 5:
+            rmse = np.sqrt(np.mean((s_gr[valid] - p_gr[valid])**2))
+            if np.std(s_gr[valid]) > 1e-5 and np.std(p_gr[valid]) > 1e-5:
+                corr, _ = pearsonr(s_gr[valid], p_gr[valid])
+                
         return corr, rmse
 
     def update_plot(self, val):
@@ -191,19 +180,23 @@ class StarSteerSimulator:
         # --- 1. Calculate History Metrics ---
         hist_corr, hist_rmse = 0.0, 0.0
         if self.chunks:
-            hist_tvt_list = []
-            hist_gr_list = []
+            hist_sensed_list = []
+            hist_pred_list = []
             for ch in self.chunks:
                 mask = (self.evalz['MD'] >= ch['md_start']) & (self.evalz['MD'] <= ch['md_end'])
                 c_data = self.evalz[mask]
                 norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
                 tvt_seg = ch['m'] * (c_data['MD'] - ch['md_start']) - norm_z_shift + ch['tvt_0'] + ch['c']
-                hist_tvt_list.append(tvt_seg)
-                hist_gr_list.append(c_data['GR'])
                 
-            full_hist_tvt = pd.concat(hist_tvt_list)
-            full_hist_gr = pd.concat(hist_gr_list)
-            hist_corr, hist_rmse = self._calculate_metrics(full_hist_tvt, full_hist_gr)
+                # Interpolate TW onto MD
+                pred_seg = np.interp(tvt_seg, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
+                
+                hist_sensed_list.append(c_data['GR'])
+                hist_pred_list.append(pred_seg)
+                
+            full_hist_sensed = np.concatenate(hist_sensed_list)
+            full_hist_pred = np.concatenate(hist_pred_list)
+            hist_corr, hist_rmse = self._calculate_metrics(full_hist_sensed, full_hist_pred)
         
         # --- 2. Evaluate Active Chunk ---
         valid_mask = (self.evalz['MD'] >= self.current_md_start) & (self.evalz['MD'] <= active_md_end)
@@ -214,15 +207,18 @@ class StarSteerSimulator:
             active_norm_Z = active_data['norm_Z'] - active_data['norm_Z'].iloc[0]
             active_tvt = active_m * (active_data['MD'] - self.current_md_start) - active_norm_Z + self.current_tvt_0 + active_c
             
-            # Draw parametric line (Automatically handles porpoising visually)
-            self.line_pred.set_data(active_tvt.values, active_data['GR'].values)
-            self.scatter_anchor.set_data([active_tvt.iloc[0]], [active_data['GR'].iloc[0]])
+            # Map TW GR onto MD using the predicted TVT
+            active_pred_gr = np.interp(active_tvt, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
             
-            # Calculate Active Metrics in TVT Space
-            active_corr, active_rmse = self._calculate_metrics(active_tvt, active_data['GR'])
+            # Draw lines in MD space
+            self.line_pred.set_data(active_data['MD'], active_pred_gr)
+            self.scatter_anchor.set_data([active_data['MD'].iloc[0]], [active_pred_gr[0]])
+            
+            # Calculate Active Metrics
+            active_corr, active_rmse = self._calculate_metrics(active_data['GR'], active_pred_gr)
             
         # Update Title
-        title_str = "Interactive Geosteering"
+        title_str = "Interactive Geosteering (MD-Domain)"
         if self.chunks:
             title_str += f" | Hist: R={hist_corr:.3f}, RMSE={hist_rmse:.1f}"
         if len(active_data) > 0:
@@ -242,13 +238,14 @@ class StarSteerSimulator:
         
         active_norm_Z = active_data['norm_Z'] - active_data['norm_Z'].iloc[0]
         active_tvt = active_m * (active_data['MD'] - self.current_md_start) - active_norm_Z + self.current_tvt_0 + active_c
+        active_pred_gr = np.interp(active_tvt, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
         
         # Maintain toggle state for newly committed chunk
         vis = self.line_pred.get_visible()
         
         # Create a static line on the plot locking in the chunk
-        line, = self.ax.plot(active_tvt.values, active_data['GR'].values, color='navy', alpha=0.7, linewidth=1.5, visible=vis)
-        anchor, = self.ax.plot([active_tvt.iloc[-1]], [active_data['GR'].iloc[-1]], 'ro', markersize=6, visible=vis)
+        line, = self.ax.plot(active_data['MD'], active_pred_gr, color='navy', alpha=0.7, linewidth=1.5, visible=vis)
+        anchor, = self.ax.plot([active_data['MD'].iloc[-1]], [active_pred_gr[-1]], 'ro', markersize=6, visible=vis)
         
         self.history_lines.append(line)
         self.history_anchors.append(anchor)
