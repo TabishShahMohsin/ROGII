@@ -29,7 +29,7 @@ def remove_rotation_noise(gr_series, cutoff):
     gr_clean = filtfilt(b, a, gr_filled)
     return gr_clean
 
-well = '6d6d93af'
+well = '1b1c5372'
 
 # Load the data (Handle gracefully if user runs this outside of correct path)
 try:
@@ -154,21 +154,22 @@ class StarSteerSimulator:
                 anchor.set_visible(vis)
         self.fig.canvas.draw_idle()
 
-    def _calculate_metrics(self, sensed_gr, pred_gr):
-        """Helper to calculate Correlation and RMSE directly on MD grid"""
-        if len(sensed_gr) == 0:
+    def _calculate_metrics(self, true_tvt, pred_tvt):
+        """Helper to calculate Correlation and RMSE directly on TVT target error"""
+        if len(true_tvt) == 0:
             return 0.0, 0.0
             
-        s_gr = np.array(sensed_gr)
-        p_gr = np.array(pred_gr)
+        t_tvt = np.array(true_tvt)
+        p_tvt = np.array(pred_tvt)
         
-        valid = ~np.isnan(s_gr) & ~np.isnan(p_gr)
+        valid = ~np.isnan(t_tvt) & ~np.isnan(p_tvt)
         corr, rmse = 0.0, 0.0
         
         if np.sum(valid) > 5:
-            rmse = np.sqrt(np.mean((s_gr[valid] - p_gr[valid])**2))
-            if np.std(s_gr[valid]) > 1e-5 and np.std(p_gr[valid]) > 1e-5:
-                corr, _ = pearsonr(s_gr[valid], p_gr[valid])
+            # Evaluate TVT error directly! No interpolation needed since they are on the same MD grid
+            rmse = np.sqrt(np.mean((t_tvt[valid] - p_tvt[valid])**2))
+            if np.std(t_tvt[valid]) > 1e-5 and np.std(p_tvt[valid]) > 1e-5:
+                corr, _ = pearsonr(t_tvt[valid], p_tvt[valid])
                 
         return corr, rmse
 
@@ -180,23 +181,21 @@ class StarSteerSimulator:
         # --- 1. Calculate History Metrics ---
         hist_corr, hist_rmse = 0.0, 0.0
         if self.chunks:
-            hist_sensed_list = []
-            hist_pred_list = []
+            hist_true_tvt_list = []
+            hist_pred_tvt_list = []
             for ch in self.chunks:
                 mask = (self.evalz['MD'] >= ch['md_start']) & (self.evalz['MD'] <= ch['md_end'])
                 c_data = self.evalz[mask]
                 norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
                 tvt_seg = ch['m'] * (c_data['MD'] - ch['md_start']) - norm_z_shift + ch['tvt_0'] + ch['c']
                 
-                # Interpolate TW onto MD
-                pred_seg = np.interp(tvt_seg, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
+                # Append True TVT and Predicted TVT for metrics
+                hist_true_tvt_list.append(c_data['TVT'])
+                hist_pred_tvt_list.append(tvt_seg)
                 
-                hist_sensed_list.append(c_data['GR'])
-                hist_pred_list.append(pred_seg)
-                
-            full_hist_sensed = np.concatenate(hist_sensed_list)
-            full_hist_pred = np.concatenate(hist_pred_list)
-            hist_corr, hist_rmse = self._calculate_metrics(full_hist_sensed, full_hist_pred)
+            full_hist_true_tvt = np.concatenate(hist_true_tvt_list)
+            full_hist_pred_tvt = np.concatenate(hist_pred_tvt_list)
+            hist_corr, hist_rmse = self._calculate_metrics(full_hist_true_tvt, full_hist_pred_tvt)
         
         # --- 2. Evaluate Active Chunk ---
         valid_mask = (self.evalz['MD'] >= self.current_md_start) & (self.evalz['MD'] <= active_md_end)
@@ -207,22 +206,22 @@ class StarSteerSimulator:
             active_norm_Z = active_data['norm_Z'] - active_data['norm_Z'].iloc[0]
             active_tvt = active_m * (active_data['MD'] - self.current_md_start) - active_norm_Z + self.current_tvt_0 + active_c
             
-            # Map TW GR onto MD using the predicted TVT
+            # Map TW GR onto MD using the predicted TVT (For Visualization ONLY)
             active_pred_gr = np.interp(active_tvt, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
             
             # Draw lines in MD space
             self.line_pred.set_data(active_data['MD'], active_pred_gr)
             self.scatter_anchor.set_data([active_data['MD'].iloc[0]], [active_pred_gr[0]])
             
-            # Calculate Active Metrics
-            active_corr, active_rmse = self._calculate_metrics(active_data['GR'], active_pred_gr)
+            # Calculate Active Metrics (TVT True vs TVT Predicted)
+            active_corr, active_rmse = self._calculate_metrics(active_data['TVT'], active_tvt)
             
         # Update Title
         title_str = "Interactive Geosteering (MD-Domain)"
         if self.chunks:
-            title_str += f" | Hist: R={hist_corr:.3f}, RMSE={hist_rmse:.1f}"
+            title_str += f" | Hist TVT: R={hist_corr:.3f}, RMSE={hist_rmse:.2f} ft"
         if len(active_data) > 0:
-            title_str += f" | Active: R={active_corr:.3f}, RMSE={active_rmse:.1f}"
+            title_str += f" | Active TVT: R={active_corr:.3f}, RMSE={active_rmse:.2f} ft"
             
         self.ax.set_title(title_str, fontsize=14, fontweight='bold')
             
