@@ -21,7 +21,7 @@ def remove_rotation_noise(gr_series, cutoff):
     b, a = butter(1, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, gr_filled)
 
-well = '93f5d2e6'
+well = '7bb17b96'
 
 try:
     hw = pd.read_csv(train_data + f"/{well}__horizontal_well.csv")
@@ -30,10 +30,22 @@ except FileNotFoundError:
     print(f"ERROR: Could not find data at {train_data}. Please verify the path.")
     exit()
 
-mask = hw['TVT_input'].isna()
-evalz = hw[mask].copy()
-
 HW_LOW_PASS_CUTOFF = 0.009
+
+mask = hw['TVT_input'].isna()
+norm_hw = hw[~mask].iloc[-1000:].copy()
+hw_gr_calib = remove_rotation_noise(norm_hw['GR'], HW_LOW_PASS_CUTOFF)
+hw_tvt_calib = norm_hw['TVT_input']
+tw_gr_calib = np.interp(hw_tvt_calib, tw['TVT'], tw['GR'])
+
+# Calculate the mean and standard deviation for the overlapping section
+hw_mean, hw_std = np.mean(hw_gr_calib), np.std(hw_gr_calib)
+tw_mean, tw_std = np.mean(tw_gr_calib), np.std(tw_gr_calib)
+
+evalz = hw[mask].copy()
+evalz['GR_raw'] = (evalz['GR'].copy() - hw_mean) / hw_std * tw_std + tw_mean
+
+
 
 fill = lambda df: df.interpolate(method='linear', limit_direction='both')
 d = lambda df: fill(df).diff().rolling(11, center=True, min_periods=1).mean()
@@ -138,7 +150,7 @@ class StarSteerSimulator:
         # Set Initial X Limits
         min_md, max_md = self.evalz['MD'].min(), self.evalz['MD'].max()
         self.ax_top.set_xlim(min_md - 50, max_md + 50)
-        self.ax_right.set_xlim(0, 150)
+        self.ax_right.set_xlim(50, 200)
         
         # --- Create Widgets (Safely positioned in the bottom left empty space) ---
         axcolor = 'lightgoldenrodyellow'
