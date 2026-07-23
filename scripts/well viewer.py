@@ -126,6 +126,7 @@ class GeosteeringSimulator:
         
         self.line_traj_main, = self.ax_main.plot(self.evalz['MD'], self.evalz['TVD'], color='darkgrey', linewidth=1.0, zorder=1, label='Trajectory')
         self.line_pred_main, = self.ax_main.plot([], [], color='dodgerblue', linewidth=4, alpha=0.7, label='Active Window', zorder=3)
+        self.line_true_main, = self.ax_main.plot([], [], color='green', linewidth=2.0, alpha=0.5, label='True Geologist Mapping', zorder=2)
         
         self.line_sensed_right, = self.ax_right.plot(self.evalz['GR'], self.evalz['TVD'], label='Sensed HW', color='black', linewidth=1.5)
         self.line_geo_right, = self.ax_right.plot(self.truth_gr_full, self.evalz['TVD'], label='Truth TW', color='green', alpha=0.3, linewidth=2)
@@ -247,6 +248,7 @@ class GeosteeringSimulator:
         self.line_sensed_top.set_xdata(x_data)
         self.line_geo_top.set_xdata(x_data)
         self.line_traj_main.set_xdata(x_data)
+        self.line_true_main.set_xdata(x_data)
         
         for i, chunk in enumerate(self.chunks):
             mask = (self.evalz['MD'] >= chunk['md_start']) & (self.evalz['MD'] <= chunk['md_end'])
@@ -267,11 +269,18 @@ class GeosteeringSimulator:
         """Swaps both the Main cross-section and Right correlation panel between TVD, TVT, and TVT - TVD"""
         self.right_axis_mode = label
         
+        geo_vis = self.toggles.get_status()[0]
+        
         if label == 'TVT':
             self.ax_main.set_ylabel("True Vertical Thickness (TVT)", fontsize=11)
             self.line_geo_right.set_data(self.tw['GR'], self.tw['TVT'])
             self.line_sensed_right.set_label('Predicted HW TVT')
             self.line_traj_main.set_label('Predicted Trajectory')
+            if 'TVT' in self.evalz.columns:
+                self.line_true_main.set_data(self.evalz[self.top_axis_mode], self.evalz['TVT'])
+                self.line_true_main.set_visible(geo_vis)
+            else:
+                self.line_true_main.set_visible(False)
             
             min_y, max_y = self.tw['TVT'].min(), self.tw['TVT'].max()
             buffer_y = abs(max_y - min_y) * 0.05
@@ -286,6 +295,11 @@ class GeosteeringSimulator:
             self.line_geo_right.set_data(self.tw['GR'], self.tw['TVT'].iloc[:len(self.evalz)])
             self.line_sensed_right.set_label('HW TVT - TVD')
             self.line_traj_main.set_label('Trajectory Offset')
+            if 'TVT' in self.evalz.columns:
+                self.line_true_main.set_data(self.evalz[self.top_axis_mode], self.evalz['TVT'] - self.evalz['TVD'])
+                self.line_true_main.set_visible(geo_vis)
+            else:
+                self.line_true_main.set_visible(False)
             
             # Calculate TVT - TVD array across evaluation points
             current_tvt = self.get_current_tvt_array(self.slider_md.val, self.slider_m.val, self.slider_c.val)
@@ -300,6 +314,7 @@ class GeosteeringSimulator:
             
         else: # TVD Mode
             self.ax_main.set_ylabel("True Vertical Depth (TVD)", fontsize=11)
+            self.line_true_main.set_visible(False)
             self.line_geo_right.set_data(self.truth_gr_full, self.evalz['TVD'])
             self.line_sensed_right.set_ydata(self.evalz['TVD'])
             
@@ -412,8 +427,11 @@ class GeosteeringSimulator:
         
     def toggle_visibility(self, label):
         if label == 'Show Geologist Mapping':
-            self.line_geo_top.set_visible(not self.line_geo_top.get_visible())
-            self.line_geo_right.set_visible(not self.line_geo_right.get_visible())
+            vis = not self.line_geo_top.get_visible()
+            self.line_geo_top.set_visible(vis)
+            self.line_geo_right.set_visible(vis)
+            if self.right_axis_mode != 'TVD':
+                self.line_true_main.set_visible(vis)
         elif label == 'Show Predicted Mapping':
             vis = not self.line_pred_top.get_visible()
             self.line_pred_top.set_visible(vis)
