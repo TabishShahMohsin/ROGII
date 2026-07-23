@@ -32,6 +32,16 @@ except FileNotFoundError:
 
 HW_LOW_PASS_CUTOFF = 0.009
 
+# CALCULATE THL (True Horizontal Length) based on X/Y Coordinates or MD fallback on entire well
+if 'X' in hw.columns and 'Y' in hw.columns:
+    hw['THL'] = np.sqrt((hw['X'] - hw['X'].iloc[0])**2 + (hw['Y'] - hw['Y'].iloc[0])**2)
+else:
+    # Fallback approximation for horizontal length if X/Y aren't explicitly provided
+    dz = hw['Z'].diff().fillna(0)
+    dmd = hw['MD'].diff().fillna(0)
+    dthl = np.sqrt(np.maximum(dmd**2 - dz**2, 0))
+    hw['THL'] = dthl.cumsum()
+
 mask = hw['TVT_input'].isna()
 norm_hw = hw[~mask].iloc[-1000:].copy()
 hw_gr_calib = remove_rotation_noise(norm_hw['GR'], HW_LOW_PASS_CUTOFF)
@@ -55,21 +65,11 @@ evalz['norm_Z'] = pred - pred.iloc[0]
 
 evalz['GR'] = remove_rotation_noise(evalz['GR_raw'], cutoff=HW_LOW_PASS_CUTOFF)
 
-# STARSTEER STANDARD: TVD increases downwards, so TVD = -Z
+# STANDARD: TVD increases downwards, so TVD = -Z
 evalz['TVD'] = -evalz['Z']
 
-# CALCULATE THL (True Horizontal Length) based on X/Y Coordinates or MD fallback
-if 'X' in evalz.columns and 'Y' in evalz.columns:
-    evalz['THL'] = np.sqrt((evalz['X'] - evalz['X'].iloc[0])**2 + (evalz['Y'] - evalz['Y'].iloc[0])**2)
-else:
-    # Fallback approximation for horizontal length if X/Y aren't explicitly provided
-    dz = evalz['Z'].diff().fillna(0)
-    dmd = evalz['MD'].diff().fillna(0)
-    dthl = np.sqrt(np.maximum(dmd**2 - dz**2, 0))
-    evalz['THL'] = dthl.cumsum()
-
-# --- 2. DUAL-WINDOW STARSTEER SIMULATOR ---
-class StarSteerSimulator:
+# --- 2. DUAL-WINDOW GEOSTEERING SIMULATOR ---
+class GeosteeringSimulator:
     def __init__(self, evalz, tw):
         self.evalz = evalz.copy()
         self.tw = tw.copy()
@@ -156,14 +156,16 @@ class StarSteerSimulator:
         self.ax_right.legend(loc='upper right', fontsize=8)
         
         min_md, max_md = self.evalz['MD'].min(), self.evalz['MD'].max()
-        min_gr, max_gr = self.evalz['GR'].min(), self.evalz['GR'].max()
         self.ax_top.set_xlim(min_md - 50, max_md + 50)
+        
+        min_gr = min(self.evalz['GR'].min(), self.tw['GR'].min())
+        max_gr = max(self.evalz['GR'].max(), self.tw['GR'].max())
         self.ax_right.set_xlim(min_gr - 10, max_gr + 10)
 
         # =========================================================================
         # WINDOW 2: CONTROL PANEL (SLIDERS, BUTTONS, CHECKBOXES)
         # =========================================================================
-        self.fig_ctrl = plt.figure("StarSteer Controls", figsize=(5.5, 9))
+        self.fig_ctrl = plt.figure("Geosteering Controls", figsize=(5.5, 9))
         self.fig_ctrl.suptitle("Geosteering Controls", fontsize=13, fontweight='bold', y=0.96)
         
         axcolor = '#e9ecef'
@@ -181,10 +183,13 @@ class StarSteerSimulator:
         self.slider_cutoff = Slider(self.ax_cutoff, 'LP Cutoff', 0.001, 0.05, valinit=HW_LOW_PASS_CUTOFF, valstep=0.001)
         
         # --- Section 2: Action Buttons ---
-        self.ax_commit = self.fig_ctrl.add_axes([0.10, 0.54, 0.38, 0.06])
+        self.ax_commit = self.fig_ctrl.add_axes([0.10, 0.54, 0.25, 0.06])
         self.btn_commit = Button(self.ax_commit, 'Drop Anchor', color='lightgreen', hovercolor='palegreen')
         
-        self.ax_reset = self.fig_ctrl.add_axes([0.52, 0.54, 0.38, 0.06])
+        self.ax_undo = self.fig_ctrl.add_axes([0.38, 0.54, 0.25, 0.06])
+        self.btn_undo = Button(self.ax_undo, 'Undo', color='khaki', hovercolor='palegoldenrod')
+        
+        self.ax_reset = self.fig_ctrl.add_axes([0.66, 0.54, 0.24, 0.06])
         self.btn_reset = Button(self.ax_reset, 'Reset All', color='salmon', hovercolor='lightsalmon')
         
         # --- Section 3: Axis Toggles (MD/THL and TVD/TVT) ---
@@ -223,6 +228,7 @@ class StarSteerSimulator:
         self.slider_c.on_changed(self.update_plot)
         self.slider_cutoff.on_changed(self.update_plot)
         self.btn_commit.on_clicked(self.commit_chunk)
+        self.btn_undo.on_clicked(self.undo_chunk)
         self.btn_reset.on_clicked(self.reset_all)
         
         self.radio_x.on_clicked(self.toggle_x_axis)
@@ -280,6 +286,8 @@ class StarSteerSimulator:
             # In TVT Mode, update main graph y-axis and map curves to True Vertical Thickness
             self.ax_main.set_ylabel("True Vertical Thickness (TVT)", fontsize=11)
             self.line_geo_right.set_data(self.tw['GR'], self.tw['TVT'])
+            self.line_sensed_right.set_label('Predicted HW TVT')
+            self.line_traj_main.set_label('Predicted Trajectory')
             
             # Set Y bounds specifically for TVT range across both main and right panels
             min_y, max_y = self.tw['TVT'].min(), self.tw['TVT'].max()
@@ -302,6 +310,16 @@ class StarSteerSimulator:
             
             self.ax_right.set_title("Correlation Panel (TVD)", fontsize=10)
             self.sync_y_from_main() # Snap back to Cross-Section's TVD bounds
+            
+            self.line_sensed_right.set_label('Sensed HW')
+            self.line_traj_main.set_label('Trajectory')
+            
+        # Refresh legends to show updated labels context
+        vis = self.legend_toggle.get_status()[0]
+        if self.ax_main.get_legend(): 
+            self.ax_main.legend(loc='upper right', fontsize=8).set_visible(vis)
+        if self.ax_right.get_legend(): 
+            self.ax_right.legend(loc='upper right', fontsize=8).set_visible(vis)
             
         # Update committed historical chunks for both main and right panels
         for i, chunk in enumerate(self.chunks):
@@ -551,7 +569,7 @@ class StarSteerSimulator:
             active_gr_corr, active_gr_rmse = self._calculate_metrics(active_data['GR'], active_pred_gr)
             
         # Update Main Window Title with RMSE/Correlation Metrics
-        title_str = "Interactive StarSteer Mode (Use Trackpad or Right-Click to Pan/Zoom)\n"
+        title_str = "Interactive Geosteering Mode (Use Trackpad or Right-Click to Pan/Zoom)\n"
         if self.chunks:
             title_str += f"Hist    |   TVT: R={hist_tvt_corr:.3f}, RMSE={hist_tvt_rmse:.2f} ft   ||   GR: R={hist_gr_corr:.3f}, RMSE={hist_gr_rmse:.2f} API\n"
         else:
@@ -616,6 +634,43 @@ class StarSteerSimulator:
         
         self.update_plot(None)
         
+    def undo_chunk(self, event):
+        if not self.chunks:
+            return
+            
+        # Pop chunk data
+        self.chunks.pop()
+        
+        # Remove graphical elements
+        self.history_lines_top.pop().remove()
+        self.history_lines_main.pop().remove()
+        self.history_lines_right.pop().remove()
+        self.history_anchors_top.pop().remove()
+        
+        if self.chunks:
+            last_chunk = self.chunks[-1]
+            self.current_md_start = last_chunk['md_end']
+            
+            # Recalculate tvt_0 based on the modified final state of the previous chunk
+            mask = (self.evalz['MD'] >= last_chunk['md_start']) & (self.evalz['MD'] <= last_chunk['md_end'])
+            c_data = self.evalz[mask]
+            norm_z_shift = c_data['norm_Z'].iloc[-1] - c_data['norm_Z'].iloc[0]
+            self.current_tvt_0 = last_chunk['m'] * (last_chunk['md_end'] - last_chunk['md_start']) - norm_z_shift + last_chunk['tvt_0'] + last_chunk['c']
+        else:
+            self.current_md_start = self.evalz['MD'].iloc[0]
+            self.current_tvt_0 = self.evalz['TVT'].iloc[0] if 'TVT' in self.evalz.columns else 0.0
+            
+        # Reset sliders for next segment
+        self.slider_md.valmin = self.current_md_start
+        self.slider_md.ax.set_xlim(self.current_md_start, self.evalz['MD'].max())
+        self.slider_md.valinit = min(self.current_md_start + 200, self.evalz['MD'].max())
+        self.slider_md.reset()
+        
+        self.slider_m.reset()
+        self.slider_c.reset()
+        
+        self.update_plot(None)
+        
     def reset_all(self, event):
         self.chunks = []
         self.current_md_start = self.evalz['MD'].iloc[0]
@@ -643,9 +698,9 @@ class StarSteerSimulator:
         self.update_plot(None)
 
 if __name__ == '__main__':
-    print("Launching Interactive StarSteer Mode...")
+    print("Launching Interactive Geosteering Mode...")
     print("Controls:")
     print("  - Use Mouse Middle/Right click to Pan.")
     print("  - Use Scroll Wheel to Zoom in/out at the cursor location.")
     print("  - Check out the brand-new Dynamic Axis Toggles.")
-    simulator = StarSteerSimulator(evalz, tw)
+    simulator = GeosteeringSimulator(evalz, tw)
