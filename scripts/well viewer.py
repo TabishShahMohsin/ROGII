@@ -53,15 +53,13 @@ slope, intercept = np.polyfit(evalz['MD'], evalz['Z'], deg=1)
 pred = evalz['Z'] - evalz['MD'] * slope - intercept
 evalz['norm_Z'] = pred - pred.iloc[0] 
 
-# Keep a raw copy of GR to allow dynamic filtering via slider
-# evalz['GR_raw'] = evalz['GR'].copy()
 evalz['GR'] = remove_rotation_noise(evalz['GR_raw'], cutoff=HW_LOW_PASS_CUTOFF)
 
 # STARSTEER STANDARD: TVD increases downwards, so TVD = -Z
 evalz['TVD'] = -evalz['Z']
 
 
-# --- 2. THE STANDALONE MATPLOTLIB APPLICATION (STARSTEER LAYOUT) ---
+# --- 2. DUAL-WINDOW STARSTEER SIMULATOR ---
 class StarSteerSimulator:
     def __init__(self, evalz, tw):
         self.evalz = evalz.copy()
@@ -81,45 +79,41 @@ class StarSteerSimulator:
         self.setup_ui()
         
     def setup_ui(self):
-        # Create Main Figure
-        self.fig = plt.figure(figsize=(16, 9))
+        # =========================================================================
+        # WINDOW 1: GRAPH & METRICS DISPLAY
+        # =========================================================================
+        self.fig_plot = plt.figure("StarSteer Visualizer", figsize=(14, 8))
+        self.fig_plot.subplots_adjust(bottom=0.08, left=0.07, right=0.95, top=0.88, wspace=0.05, hspace=0.05)
         
-        # Adjust layout to make room for sliders in the bottom left
-        plt.subplots_adjust(bottom=0.05, left=0.05, right=0.95, top=0.92) 
+        # Clean 2x2 GridSpec filling the full window (Top: MD vs GR, Bottom: MD vs TVD, Right: Stratigraphy)
+        gs = self.fig_plot.add_gridspec(2, 2, width_ratios=[4, 1], height_ratios=[1, 3], wspace=0.05, hspace=0.05)
         
-        # --- Create 3-Panel StarSteer GridSpec ---
-        # 3 rows. The 3rd row is empty on the left (for sliders).
-        gs = self.fig.add_gridspec(3, 2, width_ratios=[4, 1], height_ratios=[1, 3, 1.8], wspace=0.05, hspace=0.05)
+        self.ax_top = self.fig_plot.add_subplot(gs[0, 0])
+        self.ax_main = self.fig_plot.add_subplot(gs[1, 0], sharex=self.ax_top)
+        self.ax_right = self.fig_plot.add_subplot(gs[0:2, 1]) 
         
-        # Initialize the interconnected axes
-        self.ax_top = self.fig.add_subplot(gs[0, 0])
-        self.ax_main = self.fig.add_subplot(gs[1, 0], sharex=self.ax_top) # Shared X (MD)
-        
-        # THIS SPANS ROWS 0 & 1: Aligns perfectly with top of top graph and bottom of main graph!
-        self.ax_right = self.fig.add_subplot(gs[0:2, 1]) 
-        
-        # Hide inner tick labels for a clean, unified grid
+        # Hide inner tick labels
         plt.setp(self.ax_top.get_xticklabels(), visible=False)
         plt.setp(self.ax_right.get_yticklabels(), visible=False)
         
-        # Invert the Y axes so True Vertical Depth (TVD) increases downwards
+        # Invert Y axes so TVD increases downwards
         self.ax_main.invert_yaxis()
         self.ax_right.invert_yaxis()
         
-        # We pre-calculate the truth mapping once
+        # Pre-calculate truth mapping once
         truth_gr_full = np.interp(self.evalz['TVT'], self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
         
-        # --- TOP PANEL (MD vs GR) ---
+        # Top Panel
         self.line_sensed_top, = self.ax_top.plot(self.evalz['MD'], self.evalz['GR'], label='Sensed HW (Raw drill bit GR)', color='black', linewidth=1.5)
         self.line_geo_top, = self.ax_top.plot(self.evalz['MD'], truth_gr_full, label='Truth TW (Ref GR mapped via Geo TVT)', color='green', alpha=0.3, linewidth=2)
         self.line_pred_top, = self.ax_top.plot([], [], color='dodgerblue', linewidth=2, label='Predicted TW (Ref GR mapped via Active m, c)')
         self.scatter_anchor_top, = self.ax_top.plot([], [], 'go', markersize=8, label='Current Anchor')
         
-        # --- MAIN PANEL (MD vs TVD Cross-Section) ---
+        # Main Panel
         self.line_traj_main, = self.ax_main.plot(self.evalz['MD'], self.evalz['TVD'], color='darkgrey', linewidth=1.0, zorder=1, label='Wellbore Trajectory (TVD = -Z)')
         self.line_pred_main, = self.ax_main.plot([], [], color='dodgerblue', linewidth=4, alpha=0.7, label='Active Predict Window', zorder=3)
         
-        # --- RIGHT PANEL (GR vs TVD Stratigraphy) ---
+        # Right Panel
         self.line_sensed_right, = self.ax_right.plot(self.evalz['GR'], self.evalz['TVD'], label='Sensed HW (Drill GR vs TVD)', color='black', linewidth=1.5)
         self.line_geo_right, = self.ax_right.plot(truth_gr_full, self.evalz['TVD'], label='Truth TW (Geo TVT mapped to TVD)', color='green', alpha=0.3, linewidth=2)
         self.line_pred_right, = self.ax_right.plot([], [], color='dodgerblue', linewidth=2, label='Predicted TW (Active TVT mapped to TVD)')
@@ -129,70 +123,74 @@ class StarSteerSimulator:
         self.history_lines_right = []
         self.history_anchors_top = []
         
-        # Format Graphs
-        self.fig.suptitle("Interactive Geosteering | Initializing...", fontsize=13, fontweight='bold')
+        # Formatting
+        self.fig_plot.suptitle("Interactive Geosteering | Initializing...", fontsize=12, fontweight='bold')
         self.ax_top.set_ylabel("GR (API)", fontsize=10)
-        self.ax_main.set_xlabel("Measured Depth (MD)", fontsize=12)
-        self.ax_main.set_ylabel("True Vertical Depth (TVD)", fontsize=12)
-        self.ax_right.set_xlabel("GR (API)", fontsize=12)
+        self.ax_main.set_xlabel("Measured Depth (MD)", fontsize=11)
+        self.ax_main.set_ylabel("True Vertical Depth (TVD)", fontsize=11)
+        self.ax_right.set_xlabel("GR (API)", fontsize=11)
         
         self.ax_top.grid(True, alpha=0.3)
         self.ax_main.grid(True, alpha=0.3)
         self.ax_right.grid(True, alpha=0.3)
         
-        # Add explicit legends to all panels
         self.ax_top.legend(loc='upper right', fontsize=8)
         self.ax_main.legend(loc='upper right', fontsize=8)
         self.ax_right.legend(loc='upper right', fontsize=8)
         
-        # Set Initial X Limits
         min_md, max_md = self.evalz['MD'].min(), self.evalz['MD'].max()
         self.ax_top.set_xlim(min_md - 50, max_md + 50)
         self.ax_right.set_xlim(50, 200)
+
+        # =========================================================================
+        # WINDOW 2: CONTROL PANEL (SLIDERS, BUTTONS, CHECKBOXES)
+        # =========================================================================
+        self.fig_ctrl = plt.figure("StarSteer Controls", figsize=(5, 8))
+        self.fig_ctrl.suptitle("Geosteering Controls", fontsize=13, fontweight='bold', y=0.96)
         
-        # --- Create Widgets (Safely positioned in the bottom left empty space) ---
         axcolor = 'lightgoldenrodyellow'
         initial_end = min(self.current_md_start + 200, max_md)
         
-        # Sliders
-        self.ax_md = plt.axes([0.10, 0.26, 0.40, 0.03], facecolor=axcolor)
-        self.ax_m = plt.axes([0.10, 0.21, 0.40, 0.03], facecolor=axcolor)
-        self.ax_c = plt.axes([0.10, 0.16, 0.40, 0.03], facecolor=axcolor)
-        self.ax_cutoff = plt.axes([0.10, 0.11, 0.40, 0.03], facecolor=axcolor)
+        # --- Section 1: Parameter Sliders ---
+        self.ax_md     = self.fig_ctrl.add_axes([0.30, 0.85, 0.62, 0.035], facecolor=axcolor)
+        self.ax_m      = self.fig_ctrl.add_axes([0.30, 0.78, 0.62, 0.035], facecolor=axcolor)
+        self.ax_c      = self.fig_ctrl.add_axes([0.30, 0.71, 0.62, 0.035], facecolor=axcolor)
+        self.ax_cutoff = self.fig_ctrl.add_axes([0.30, 0.64, 0.62, 0.035], facecolor=axcolor)
         
-        self.slider_md = Slider(self.ax_md, 'Active MD End', self.current_md_start + 1, max_md, valinit=initial_end, valstep=5)
-        self.slider_m = Slider(self.ax_m, 'm (Apparent Dip)', -0.15, 0.15, valinit=0.0, valstep=0.001)
-        self.slider_c = Slider(self.ax_c, 'c (Fault Offset)', -5.0, 5.0, valinit=0.0, valstep=0.1)
+        self.slider_md     = Slider(self.ax_md, 'Active MD End', self.current_md_start + 1, max_md, valinit=initial_end, valstep=5)
+        self.slider_m      = Slider(self.ax_m, 'm (Apparent Dip)', -0.15, 0.15, valinit=0.0, valstep=0.001)
+        self.slider_c      = Slider(self.ax_c, 'c (Fault Offset)', -5.0, 5.0, valinit=0.0, valstep=0.1)
         self.slider_cutoff = Slider(self.ax_cutoff, 'GR LP Cutoff', 0.001, 0.05, valinit=HW_LOW_PASS_CUTOFF, valstep=0.001)
         
-        # Buttons
-        self.ax_commit = plt.axes([0.10, 0.04, 0.15, 0.05])
+        # --- Section 2: Action Buttons ---
+        self.ax_commit = self.fig_ctrl.add_axes([0.10, 0.52, 0.38, 0.06])
         self.btn_commit = Button(self.ax_commit, 'Drop Anchor', color='lightgreen', hovercolor='palegreen')
         
-        self.ax_reset = plt.axes([0.28, 0.04, 0.15, 0.05])
+        self.ax_reset = self.fig_ctrl.add_axes([0.52, 0.52, 0.38, 0.06])
         self.btn_reset = Button(self.ax_reset, 'Reset All', color='salmon', hovercolor='lightsalmon')
         
-        # Toggles
-        self.ax_toggles = plt.axes([0.55, 0.18, 0.22, 0.10], frameon=False)
+        # --- Section 3: Neat Checkboxes / Toggles ---
+        self.ax_toggles = self.fig_ctrl.add_axes([0.10, 0.33, 0.80, 0.13], facecolor='#f8f9fa')
+        self.ax_toggles.set_title("Layer Visibility", fontsize=9, pad=4, loc='left', fontweight='bold')
         self.toggles = CheckButtons(self.ax_toggles, ['Show Geologist Mapping', 'Show Predicted Mapping'], [True, True])
         
-        self.ax_lp_toggle = plt.axes([0.55, 0.10, 0.15, 0.05], frameon=False)
+        self.ax_lp_toggle = self.fig_ctrl.add_axes([0.10, 0.20, 0.80, 0.08], facecolor='#f8f9fa')
+        self.ax_lp_toggle.set_title("Signal Processing", fontsize=9, pad=4, loc='left', fontweight='bold')
         self.lp_toggle = CheckButtons(self.ax_lp_toggle, ['Enable LP Filter'], [True])
         
-        self.ax_legend_toggle = plt.axes([0.55, 0.04, 0.15, 0.05], frameon=False)
+        self.ax_legend_toggle = self.fig_ctrl.add_axes([0.10, 0.07, 0.80, 0.08], facecolor='#f8f9fa')
+        self.ax_legend_toggle.set_title("Display Options", fontsize=9, pad=4, loc='left', fontweight='bold')
         self.legend_toggle = CheckButtons(self.ax_legend_toggle, ['Show Legends'], [True])
-        
-        # --- Mathematical Alignment Engine ---
+
+        # --- Bind Callbacks & Events ---
         self.ax_main.callbacks.connect('ylim_changed', self.sync_y_from_main)
         self.ax_right.callbacks.connect('ylim_changed', self.sync_y_from_right)
         
-        # Connect Mouse/Touchpad Gestures
-        self.fig.canvas.mpl_connect('scroll_event', self.on_scroll)
-        self.fig.canvas.mpl_connect('button_press_event', self.on_press)
-        self.fig.canvas.mpl_connect('button_release_event', self.on_release)
-        self.fig.canvas.mpl_connect('motion_notify_event', self.on_motion)
+        self.fig_plot.canvas.mpl_connect('scroll_event', self.on_scroll)
+        self.fig_plot.canvas.mpl_connect('button_press_event', self.on_press)
+        self.fig_plot.canvas.mpl_connect('button_release_event', self.on_release)
+        self.fig_plot.canvas.mpl_connect('motion_notify_event', self.on_motion)
         
-        # Bind UI Events
         self.slider_md.on_changed(self.update_plot)
         self.slider_m.on_changed(self.update_plot)
         self.slider_c.on_changed(self.update_plot)
@@ -203,25 +201,21 @@ class StarSteerSimulator:
         self.lp_toggle.on_clicked(self.toggle_lp_filter)
         self.legend_toggle.on_clicked(self.toggle_legends)
         
-        # --- INIT LIMITS AND CALC BBOXES ---
-        # Draw once to compute physical bboxes for the sync engine
-        self.fig.canvas.draw()
+        # --- Init Sync and Axis Limits ---
+        self.fig_plot.canvas.draw()
         
         min_tvd, max_tvd = self.evalz['TVD'].min(), self.evalz['TVD'].max()
         buffer_tvd = abs(max_tvd - min_tvd) * 0.05
         if buffer_tvd == 0: buffer_tvd = 10
-        # Set main plot limits. This triggers sync_y_from_main, perfectly aligning ax_right!
         self.ax_main.set_ylim(max_tvd + buffer_tvd, min_tvd - buffer_tvd) 
 
-        # Save initial limits to properly reset the zoom later
         self.initial_xlim = self.ax_top.get_xlim()
         self.initial_ylim = self.ax_main.get_ylim()
         
         self.update_plot(None)
         plt.show() 
 
-    # --- THE ALIGNMENT ENGINE ---
-    # Keeps horizontal grids perfectly matched across axes of different physical heights
+    # --- ALIGNMENT ENGINE ---
     def sync_y_from_main(self, ax=None):
         if self._syncing: return
         self._syncing = True
@@ -251,7 +245,6 @@ class StarSteerSimulator:
         ax = event.inaxes
         if ax is None: return
         
-        # Smooth zoom for high-res touchpads using step velocity
         scale_factor = 1.15 ** (-event.step)
         
         # Zoom X
@@ -266,7 +259,7 @@ class StarSteerSimulator:
         y_ratio = (event.ydata - y_min) / (y_max - y_min)
         ax.set_ylim(event.ydata - y_range * y_ratio, event.ydata + y_range * (1 - y_ratio))
         
-        self.fig.canvas.draw_idle()
+        self.fig_plot.canvas.draw_idle()
 
     def on_press(self, event):
         if event.button in [2, 3] and event.inaxes in [self.ax_top, self.ax_main, self.ax_right]: 
@@ -294,7 +287,7 @@ class StarSteerSimulator:
         
         ax.set_xlim(self.xlim_start[0] - dx_data, self.xlim_start[1] - dx_data)
         ax.set_ylim(self.ylim_start[0] - dy_data, self.ylim_start[1] - dy_data)
-        self.fig.canvas.draw_idle()
+        self.fig_plot.canvas.draw_idle()
         
     def toggle_visibility(self, label):
         if label == 'Show Geologist Mapping':
@@ -310,14 +303,14 @@ class StarSteerSimulator:
             for line in self.history_lines_main: line.set_visible(vis)
             for line in self.history_lines_right: line.set_visible(vis)
             for anchor in self.history_anchors_top: anchor.set_visible(vis)
-        self.fig.canvas.draw_idle()
+        self.fig_plot.canvas.draw_idle()
 
     def toggle_legends(self, label):
         vis = self.legend_toggle.get_status()[0]
         if self.ax_top.get_legend(): self.ax_top.get_legend().set_visible(vis)
         if self.ax_main.get_legend(): self.ax_main.get_legend().set_visible(vis)
         if self.ax_right.get_legend(): self.ax_right.get_legend().set_visible(vis)
-        self.fig.canvas.draw_idle()
+        self.fig_plot.canvas.draw_idle()
 
     def toggle_lp_filter(self, label):
         self._apply_gr_filter()
@@ -332,7 +325,6 @@ class StarSteerSimulator:
         self.line_sensed_right.set_xdata(self.evalz['GR'])
 
     def _calculate_metrics(self, true_arr, pred_arr):
-        """Generic helper to calculate Correlation and RMSE"""
         if len(true_arr) == 0:
             return 0.0, 0.0
             
@@ -355,12 +347,11 @@ class StarSteerSimulator:
         active_c = self.slider_c.val
         active_cutoff = self.slider_cutoff.val
         
-        # Check if the cutoff slider was moved, recalculate GR smoothing if it was
         if abs(active_cutoff - self.current_cutoff) > 1e-6:
             self.current_cutoff = active_cutoff
             self._apply_gr_filter()
         
-        # --- 1. Calculate History Metrics ---
+        # --- Calculate History Metrics ---
         hist_tvt_corr, hist_tvt_rmse = 0.0, 0.0
         hist_gr_corr, hist_gr_rmse = 0.0, 0.0
         
@@ -374,7 +365,6 @@ class StarSteerSimulator:
                 norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
                 tvt_seg = ch['m'] * (c_data['MD'] - ch['md_start']) - norm_z_shift + ch['tvt_0'] + ch['c']
                 
-                # Interpolate TW onto MD
                 pred_gr_seg = np.interp(tvt_seg, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
                 
                 hist_true_tvt_list.append(c_data['TVT'])
@@ -390,7 +380,7 @@ class StarSteerSimulator:
             hist_tvt_corr, hist_tvt_rmse = self._calculate_metrics(full_hist_true_tvt, full_hist_pred_tvt)
             hist_gr_corr, hist_gr_rmse = self._calculate_metrics(full_hist_sensed_gr, full_hist_pred_gr)
         
-        # --- 2. Evaluate Active Chunk ---
+        # --- Evaluate Active Chunk ---
         valid_mask = (self.evalz['MD'] >= self.current_md_start) & (self.evalz['MD'] <= active_md_end)
         active_data = self.evalz[valid_mask]
         
@@ -401,24 +391,17 @@ class StarSteerSimulator:
             active_norm_Z = active_data['norm_Z'] - active_data['norm_Z'].iloc[0]
             active_tvt = active_m * (active_data['MD'] - self.current_md_start) - active_norm_Z + self.current_tvt_0 + active_c
             
-            # Map TW GR onto MD using the predicted TVT 
             active_pred_gr = np.interp(active_tvt, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
             
-            # Update Top Plot (MD vs GR)
             self.line_pred_top.set_data(active_data['MD'], active_pred_gr)
             self.scatter_anchor_top.set_data([active_data['MD'].iloc[0]], [active_pred_gr[0]])
-            
-            # Update Main Plot (MD vs TVD trajectory highlight)
             self.line_pred_main.set_data(active_data['MD'], active_data['TVD'])
-            
-            # Update Right Plot (GR vs TVD)
             self.line_pred_right.set_data(active_pred_gr, active_data['TVD'])
             
-            # Calculate Active Metrics
             active_tvt_corr, active_tvt_rmse = self._calculate_metrics(active_data['TVT'], active_tvt)
             active_gr_corr, active_gr_rmse = self._calculate_metrics(active_data['GR'], active_pred_gr)
             
-        # Update Title with Dual Metrics
+        # Update Main Window Title with RMSE/Correlation Metrics
         title_str = "Interactive StarSteer Mode (Use Trackpad or Right-Click to Pan/Zoom)\n"
         if self.chunks:
             title_str += f"Hist    |   TVT: R={hist_tvt_corr:.3f}, RMSE={hist_tvt_rmse:.2f} ft   ||   GR: R={hist_gr_corr:.3f}, RMSE={hist_gr_rmse:.2f} API\n"
@@ -427,8 +410,8 @@ class StarSteerSimulator:
         if len(active_data) > 0:
             title_str += f"Active |   TVT: R={active_tvt_corr:.3f}, RMSE={active_tvt_rmse:.2f} ft   ||   GR: R={active_gr_corr:.3f}, RMSE={active_gr_rmse:.2f} API"
             
-        self.fig.suptitle(title_str, fontsize=12, fontweight='bold')
-        self.fig.canvas.draw_idle()
+        self.fig_plot.suptitle(title_str, fontsize=11, fontweight='bold')
+        self.fig_plot.canvas.draw_idle()
         
     def commit_chunk(self, event):
         active_md_end = self.slider_md.val
@@ -444,7 +427,6 @@ class StarSteerSimulator:
         
         vis = self.line_pred_top.get_visible()
         
-        # Create static lines on all 3 plots locking in the chunk (Matched colors)
         l_top, = self.ax_top.plot(active_data['MD'], active_pred_gr, color='navy', alpha=0.7, linewidth=1.5, visible=vis)
         l_main, = self.ax_main.plot(active_data['MD'], active_data['TVD'], color='navy', alpha=0.7, linewidth=4, visible=vis)
         l_right, = self.ax_right.plot(active_pred_gr, active_data['TVD'], color='navy', alpha=0.7, linewidth=1.5, visible=vis)
@@ -455,7 +437,6 @@ class StarSteerSimulator:
         self.history_lines_right.append(l_right)
         self.history_anchors_top.append(anchor)
         
-        # Save History
         self.chunks.append({
             'md_start': self.current_md_start,
             'md_end': active_md_end,
@@ -464,11 +445,9 @@ class StarSteerSimulator:
             'tvt_0': self.current_tvt_0
         })
         
-        # Handoff to Next Chunk
         self.current_md_start = active_md_end
         self.current_tvt_0 = active_tvt.iloc[-1]
         
-        # Reset Sliders
         max_md = self.evalz['MD'].max()
         if self.current_md_start < max_md:
             self.slider_md.valmin = self.current_md_start + 1
@@ -482,13 +461,11 @@ class StarSteerSimulator:
         self.current_md_start = self.evalz['MD'].iloc[0]
         self.current_tvt_0 = self.evalz['TVT'].iloc[0]
         
-        # Remove visual history
         for lst in [self.history_lines_top, self.history_lines_main, self.history_lines_right, self.history_anchors_top]:
             for item in lst:
                 item.remove()
             lst.clear()
         
-        # Reset Sliders
         self.slider_md.valmin = self.current_md_start + 1
         self.slider_md.ax.set_xlim(self.slider_md.valmin, self.slider_md.valmax)
         self.slider_md.set_val(min(self.current_md_start + 200, self.evalz['MD'].max()))
@@ -496,7 +473,6 @@ class StarSteerSimulator:
         self.slider_c.set_val(0.0)
         self.slider_cutoff.set_val(HW_LOW_PASS_CUTOFF)
         
-        # Restore original Plot Zoom/Pan
         self.ax_top.set_xlim(self.initial_xlim)
         self.ax_main.set_ylim(self.initial_ylim)
 
