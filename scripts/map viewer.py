@@ -5,12 +5,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
 from scipy.spatial.distance import cdist
+import sys
 
 # =====================================================================
 # CONFIGURATION & USER SETTINGS
 # =====================================================================
 # Set the target well name at the top of the file to explore instantly
 WELL_NAME = '1b1eba53'
+WELL_NAME = sys.argv[1] if len(sys.argv) > 1 else WELL_NAME
 TOP_K_NEIGHBORS = 3
 DATA_DIR = '../data/train'
 

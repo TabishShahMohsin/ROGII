@@ -7,6 +7,7 @@ from scipy.signal import butter, filtfilt
 from scipy.stats import pearsonr
 import warnings
 warnings.filterwarnings('ignore')
+import sys
 
 # --- 1. DATA PREPARATION ---
 IS_KAGGLE = os.path.exists('/kaggle/input')
@@ -21,7 +22,8 @@ def remove_rotation_noise(gr_series, cutoff):
     b, a = butter(1, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, gr_filled)
 
-well = '276b012a'
+well = '1b1eba53'
+well = sys.argv[1] if len(sys.argv) > 1 else well
 
 try:
     hw = pd.read_csv(os.path.join(train_data, f"{well}__horizontal_well.csv"))
