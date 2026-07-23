@@ -12,11 +12,25 @@ from scipy.spatial.distance import cdist
 # Set the target well name at the top of the file to explore instantly
 WELL_NAME = '1b1eba53'
 TOP_K_NEIGHBORS = 3
+DATA_DIR = '../data/train'
 
 # Set global plotting aesthetics for a professional, high-performance look
 plt.rcParams['font.sans-serif'] = 'DejaVu Sans'
 plt.rcParams['axes.edgecolor'] = '#cccccc'
 plt.rcParams['axes.linewidth'] = 0.8
+
+def load_well_df(well_name):
+    """Loads a single well CSV on demand for high memory efficiency."""
+    filepath = os.path.join(DATA_DIR, f"{well_name}__horizontal_well.csv")
+    if not os.path.exists(filepath):
+        matches = glob.glob(f'*{well_name}__horizontal_well.csv')
+        if matches:
+            filepath = matches[0]
+        else:
+            matches_train = glob.glob(f'../data/train/*{well_name}*__horizontal_well.csv')
+            if matches_train:
+                filepath = matches_train[0]
+    return pd.read_csv(filepath)
 
 def calculate_well_similarity(well_a_df, well_b_df):
     """
@@ -73,75 +87,46 @@ def project_neighbor_tvt(w1_df, w2_df):
     
     return w1_mapped
 
-print("Loading well datasets from ../data/train/...")
-csv_files = glob.glob('../data/train/*__horizontal_well.csv')
+print(f"Scanning well datasets from {DATA_DIR}...")
+csv_files = glob.glob(os.path.join(DATA_DIR, '*__horizontal_well.csv'))
 if not csv_files:
     csv_files = glob.glob('*__horizontal_well.csv')
 
-well_data_cache = {}
 well_names = []
+start_points = []
+ms = []
 
-# Batch load all well datasets efficiently into memory cache
 for filepath in sorted(csv_files):
     filename = os.path.basename(filepath)
     w_name = filename.split('__')[0]
     try:
-        df = pd.read_csv(filepath)
-        if {'X', 'Y', 'Z', 'TVT_input'}.issubset(df.columns):
-            well_data_cache[w_name] = df
-            well_names.append(w_name)
+        # Read only necessary columns for fast metadata indexing
+        df = pd.read_csv(filepath, usecols=['X', 'Y', 'Z', 'MD', 'TVT_input'])
+        evalz = df[df['TVT_input'].isna()]
+        if len(evalz) == 0:
+            evalz = df
+        try:
+            m, c = np.polyfit(evalz['MD'], evalz['Z'], deg=1)
+        except:
+            m = 0.0
+        start_points.append((evalz['X'].iloc[0], evalz['Y'].iloc[0]))
+        ms.append(m)
+        well_names.append(w_name)
     except Exception as e:
-        print(f"Error loading {filepath}: {e}")
+        pass
 
-if not well_names:
-    print("No valid well files found! Creating mock data for demonstration.")
-    well_names = ['well_alpha', 'well_beta', 'well_gamma', 'well_delta', '1b1eba53']
-    for w in well_names:
-        steps = 100
-        x = np.linspace(0, 5000, steps) + np.random.normal(0, 50, steps)
-        y = np.linspace(0, 5000, steps) + np.random.normal(0, 50, steps)
-        z = -np.linspace(2000, 2200, steps)
-        tvt = np.linspace(50, 60, steps)
-        md = np.linspace(0, 6000, steps)
-        tvt_input = tvt.copy()
-        tvt_input[:70] = np.nan
-        df = pd.DataFrame({'X': x, 'Y': y, 'Z': z, 'TVT': tvt, 'MD': md, 'TVT_input': tvt_input, 'GR': np.random.normal(75, 15, steps)})
-        well_data_cache[w] = df
+print(f"Successfully indexed {len(well_names)} wells.")
 
-print(f"Successfully loaded {len(well_names)} wells into cache.")
-
-# Pre-compute start points and slope metrics for all wells
-start_points = []
-ms = []
-valid_well_names = []
-
-for w in well_names:
-    hw = well_data_cache[w]
-    evalz = hw[hw['TVT_input'].isna()]
-    if len(evalz) == 0:
-        evalz = hw
-    try:
-        m, c = np.polyfit(evalz['MD'], evalz['Z'], deg=1)
-    except:
-        m = 0.0
-    start_points.append((evalz['X'].iloc[0], evalz['Y'].iloc[0]))
-    ms.append(m)
-    valid_well_names.append(w)
-
-well_names = valid_well_names
 start_points = np.array(start_points)
 start_tree = KDTree(start_points)
 
 # Select target well based on top configuration variable
 if WELL_NAME in well_names:
-    selected_well_idx = well_names.index(WELL_NAME)
     current_well = WELL_NAME
 else:
     print(f"Well '{WELL_NAME}' not found in dataset. Defaulting to first available well: {well_names[0]}")
-    selected_well_idx = 0
     current_well = well_names[0]
 
-# Setup high-performance figure layout using GridSpec
 fig = plt.figure(figsize=(18, 10))
 fig.canvas.manager.set_window_title(f'Well Map & Similarity Explorer - Target: {current_well}')
 
@@ -153,14 +138,14 @@ ax_drxn = fig.add_subplot(gs[0, 2])     # Z + TVT vs Direction of Propagation
 ax_proj = fig.add_subplot(gs[1, 1:])    # Neighbor TVT projection comparison on bottom right
 
 def render_explorer():
-    """Renders all analytical panels and updates spatial plots efficiently."""
+    """Renders all analytical panels and updates spatial plots efficiently on demand."""
     ax_map.clear()
     ax_z_md.clear()
     ax_drxn.clear()
     ax_proj.clear()
     
-    # Retrieve target well data
-    h1 = well_data_cache[current_well]
+    # Load target well on demand
+    h1 = load_well_df(current_well)
     e1 = h1[h1['TVT_input'].isna()]
     if len(e1) == 0: 
         e1 = h1
@@ -183,7 +168,7 @@ def render_explorer():
         w2 = well_names[idx]
         if w2 == current_well:
             continue
-        h2 = well_data_cache[w2]
+        h2 = load_well_df(w2)
         e2 = h2[h2['TVT_input'].isna()]
         if len(e2) == 0: 
             e2 = h2
@@ -200,27 +185,24 @@ def render_explorer():
     top_neighbor_names = {res['well'] for res in top_results}
     
     # -----------------------------------------------------------------
-    # 1. Map View (XY Plane) with automatic zoom on target & top neighbors
     # -----------------------------------------------------------------
     ax_map.set_title(f'Map View (XY Plane)\nTarget: {current_well}', fontsize=11, fontweight='bold', color='#1f77b4')
     ax_map.set_xlabel('X Coordinate (ft/m)')
     ax_map.set_ylabel('Y Coordinate (ft/m)')
     ax_map.grid(True, linestyle='--', alpha=0.5)
     
-    # Plot background wells in neutral gray
-    for w in well_names:
+    # Plot background well start points in neutral gray for maximum speed
+    for idx, w in enumerate(well_names):
         if w == current_well or w in top_neighbor_names:
             continue
-        hw = well_data_cache[w]
-        evalz = hw[hw['TVT_input'].isna()]
-        if len(evalz) == 0: evalz = hw
-        ax_map.plot(evalz['X'], evalz['Y'], color='#d0d0d0', alpha=0.4, linewidth=1)
+        sx, sy = start_points[idx]
+        ax_map.scatter([sx], [sy], color='#d0d0d0', s=10, alpha=0.5)
             
     # Plot top neighbor wells with distinct highlighted colors
     neighbor_colors = ['#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
     for i, res in enumerate(top_results):
         w2 = res['well']
-        h2 = well_data_cache[w2]
+        h2 = load_well_df(w2)
         e2 = h2[h2['TVT_input'].isna()]
         if len(e2) == 0: e2 = h2
         col = neighbor_colors[i % len(neighbor_colors)]
@@ -235,7 +217,7 @@ def render_explorer():
     all_x = list(e1['X'])
     all_y = list(e1['Y'])
     for res in top_results:
-        h2 = well_data_cache[res['well']]
+        h2 = load_well_df(res['well'])
         e2 = h2[h2['TVT_input'].isna()]
         if len(e2) == 0: e2 = h2
         all_x.extend(e2['X'].tolist())
@@ -251,7 +233,6 @@ def render_explorer():
     ax_map.legend(loc='upper right', fontsize=8)
     
     # -----------------------------------------------------------------
-    # 2. Plot Z + TVT vs MD
     # -----------------------------------------------------------------
     ax_z_md.set_title(f'Z + TVT vs MD (Top {TOP_K_NEIGHBORS} Neighbors)', fontsize=10, fontweight='bold')
     ax_z_md.plot(e1['MD'], y1_vals, label=f'Target: {current_well}', color='black', linewidth=2.5, zorder=5)
@@ -261,12 +242,11 @@ def render_explorer():
     
     for res in top_results:
         w2 = res['well']
-        h2 = well_data_cache[w2]
+        h2 = load_well_df(w2)
         e2 = h2[h2['TVT_input'].isna()]
         if len(e2) == 0: e2 = h2
         y2_vals = e2['TVT'] + e2['Z']
         
-        # Safely interpolate y2 onto e1's MD grid for accurate RMSE comparison
         y2_interp = np.interp(e1['MD'], e2['MD'], y2_vals, left=np.nan, right=np.nan)
         rmse_val = safe_rmse(y1_vals.values, y2_interp)
         
@@ -274,7 +254,6 @@ def render_explorer():
     ax_z_md.legend(loc='upper left', fontsize=7)
     
     # -----------------------------------------------------------------
-    # 3. Plot Z + TVT vs Direction of Propagation
     # -----------------------------------------------------------------
     ax_drxn.set_title('Z + TVT vs Direction of Propagation', fontsize=10, fontweight='bold')
     theta = np.arctan2(e1["Y"].iloc[-1] - e1["Y"].iloc[0], e1["X"].iloc[-1] - e1["X"].iloc[0])
@@ -288,7 +267,7 @@ def render_explorer():
     
     for res in top_results:
         w2 = res['well']
-        h2 = well_data_cache[w2]
+        h2 = load_well_df(w2)
         e2 = h2[h2['TVT_input'].isna()]
         if len(e2) == 0: e2 = h2
         X2_proj = (e2["X"] * cos_t + e2["Y"] * sin_t)
@@ -298,7 +277,6 @@ def render_explorer():
     ax_drxn.legend(loc='upper left', fontsize=7)
     
     # -----------------------------------------------------------------
-    # 4. Neighbor TVT Projection Comparison (Bottom Right with RMSE)
     # -----------------------------------------------------------------
     ax_proj.set_title('Projected Neighbor TVT Mapping onto Target Well', fontsize=10, fontweight='bold')
     y1_detrended = y1_vals - m1 * e1['MD']
@@ -309,12 +287,12 @@ def render_explorer():
     
     for res in top_results:
         w2 = res['well']
-        h2 = well_data_cache[w2]
+        h2 = load_well_df(w2)
         e1_mapped = project_neighbor_tvt(e1, h2)
         y2_proj = e1_mapped['n_ztvt'] - m1 * e1['MD']
         y2_proj = y2_proj - y2_proj.iloc[0] + (y1_vals.iloc[0] - m1 * e1['MD'].iloc[0])
         
-        # Calculate final RMSE for the projected mapping
+        # Calculate final RMSE for the projected mapping and display in legend
         proj_rmse = safe_rmse(y1_detrended.values, y2_proj.values)
         
         ax_proj.scatter(e1['MD'], y2_proj, c=e1_mapped['dist_n'], cmap='plasma', s=18, label=f'{w2} (Dist: {res["distance_ft"]:.0f}ft, RMSE: {proj_rmse:.2f})')

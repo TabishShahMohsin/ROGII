@@ -14,7 +14,7 @@ BASE_DIR = '/kaggle/input/competitions/rogii-wellbore-geology-prediction' if IS_
 train_data = os.path.join(BASE_DIR, "train")
 
 def remove_rotation_noise(gr_series, cutoff):
-    """Low pass filter."""
+    """Low pass filter for removing rotational noise in gamma ray logs."""
     gr_filled = gr_series.interpolate(method='linear').bfill().ffill()
     nyquist = 0.5 
     normal_cutoff = cutoff / nyquist
@@ -24,63 +24,70 @@ def remove_rotation_noise(gr_series, cutoff):
 well = '276b012a'
 
 try:
-    hw = pd.read_csv(train_data + f"/{well}__horizontal_well.csv")
-    tw = pd.read_csv(train_data + f"/{well}__typewell.csv")
-except FileNotFoundError:
-    print(f"ERROR: Could not find data at {train_data}. Please verify the path.")
-    exit()
+    hw = pd.read_csv(os.path.join(train_data, f"{well}__horizontal_well.csv"))
+    tw = pd.read_csv(os.path.join(train_data, f"{well}__typewell.csv"))
+except Exception:
+    # Fallback or synthetic data fallback if file not found locally
+    print("Warning: CSV files not found. Creating fallback synthetic data structures for testing.")
+    md_range = np.linspace(0, 5000, 500)
+    hw = pd.DataFrame({
+        'MD': md_range,
+        'X': md_range * 0.9,
+        'Y': md_range * 0.4,
+        'Z': -2000 - md_range * 0.05,
+        'GR': 60 + 20 * np.sin(md_range / 100),
+        'TVT_input': [np.nan if i > 100 else 1000 + i * 0.5 for i in range(500)]
+    })
+    tw = pd.DataFrame({
+        'TVT': np.linspace(950, 1500, 200),
+        'GR': 50 + 30 * np.cos(np.linspace(0, 10, 200))
+    })
 
 HW_LOW_PASS_CUTOFF = 0.009
 
-# CALCULATE THL (True Horizontal Length) based on X/Y Coordinates or MD fallback on entire well
+# CALCULATE THL (True Horizontal Length) based on X/Y Coordinates or MD fallback
 if 'X' in hw.columns and 'Y' in hw.columns:
     hw['THL'] = np.sqrt((hw['X'] - hw['X'].iloc[0])**2 + (hw['Y'] - hw['Y'].iloc[0])**2)
 else:
-    # Fallback approximation for horizontal length if X/Y aren't explicitly provided
     dz = hw['Z'].diff().fillna(0)
     dmd = hw['MD'].diff().fillna(0)
     dthl = np.sqrt(np.maximum(dmd**2 - dz**2, 0))
     hw['THL'] = dthl.cumsum()
 
 mask = hw['TVT_input'].isna()
-norm_hw = hw[~mask].iloc[-1000:].copy()
-hw_gr_calib = remove_rotation_noise(norm_hw['GR'], HW_LOW_PASS_CUTOFF)
-hw_tvt_calib = norm_hw['TVT_input']
-tw_gr_calib = np.interp(hw_tvt_calib, tw['TVT'], tw['GR'])
+if mask.any() and (~mask).any():
+    norm_hw = hw[~mask].iloc[-1000:].copy()
+    hw_gr_calib = remove_rotation_noise(norm_hw['GR'], HW_LOW_PASS_CUTOFF)
+    hw_tvt_calib = norm_hw['TVT_input']
+    tw_gr_calib = np.interp(hw_tvt_calib, tw['TVT'], tw['GR'])
 
-# Calculate the mean and standard deviation for the overlapping section
-hw_mean, hw_std = np.mean(hw_gr_calib), np.std(hw_gr_calib)
-tw_mean, tw_std = np.mean(tw_gr_calib), np.std(tw_gr_calib)
+    hw_mean, hw_std = np.mean(hw_gr_calib), np.std(hw_gr_calib)
+    tw_mean, tw_std = np.mean(tw_gr_calib), np.std(tw_gr_calib)
+else:
+    hw_mean, hw_std, tw_mean, tw_std = hw['GR'].mean(), hw['GR'].std(), tw['GR'].mean(), tw['GR'].std()
 
 evalz = hw[mask].copy()
+if len(evalz) == 0:
+    evalz = hw.copy()
+
 evalz['GR_raw'] = (evalz['GR'].copy() - hw_mean) / hw_std * tw_std + tw_mean
-
-fill = lambda df: df.interpolate(method='linear', limit_direction='both')
-d = lambda df: fill(df).diff().rolling(11, center=True, min_periods=1).mean()
-
-# Normalizing Z and computing pure TVD
-slope, intercept = np.polyfit(evalz['MD'], evalz['Z'], deg=1)
-pred = evalz['Z'] - evalz['MD'] * slope - intercept
-evalz['norm_Z'] = pred - pred.iloc[0] 
-
 evalz['GR'] = remove_rotation_noise(evalz['GR_raw'], cutoff=HW_LOW_PASS_CUTOFF)
-
-# STANDARD: TVD increases downwards, so TVD = -Z
 evalz['TVD'] = -evalz['Z']
 
-# --- 2. DUAL-WINDOW GEOSTEERING SIMULATOR ---
+slope, intercept = np.polyfit(evalz['MD'], evalz['Z'], deg=1)
+pred = evalz['Z'] - evalz['MD'] * slope - intercept
+evalz['norm_Z'] = pred - pred.iloc[0]
+
 class GeosteeringSimulator:
     def __init__(self, evalz, tw):
         self.evalz = evalz.copy()
         self.tw = tw.copy()
         
-        # State tracking for chunks and parameters
         self.chunks = [] 
         self.current_md_start = self.evalz['MD'].iloc[0]
-        self.current_tvt_0 = self.evalz['TVT'].iloc[0] if 'TVT' in self.evalz.columns else 0.0
+        self.current_tvt_0 = self.evalz['TVT'].iloc[0] if 'TVT' in self.evalz.columns else 1000.0
         self.current_cutoff = HW_LOW_PASS_CUTOFF
         
-        # State tracking for Dynamic Axes (MD vs THL, TVD vs TVT)
         self.top_axis_mode = 'MD'
         self.right_axis_mode = 'TVD'
         
@@ -89,7 +96,6 @@ class GeosteeringSimulator:
         self.pan_ax = None
         self._syncing = False
         
-        # Pre-calculate the geological truth mapping for TVD correlation mode
         if 'TVT' in self.evalz.columns:
             self.truth_gr_full = np.interp(self.evalz['TVT'], self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
         else:
@@ -98,38 +104,29 @@ class GeosteeringSimulator:
         self.setup_ui()
         
     def setup_ui(self):
-        # =========================================================================
-        # WINDOW 1: GRAPH & METRICS DISPLAY
-        # =========================================================================
         self.fig_plot = plt.figure("StarSteer Visualizer", figsize=(14, 8))
         self.fig_plot.subplots_adjust(bottom=0.08, left=0.07, right=0.95, top=0.88, wspace=0.05, hspace=0.05)
         
-        # Clean 2x2 GridSpec filling the full window (Top: MD vs GR, Bottom: MD vs TVD, Right: Stratigraphy)
         gs = self.fig_plot.add_gridspec(2, 2, width_ratios=[4, 1], height_ratios=[1, 3], wspace=0.05, hspace=0.05)
         
         self.ax_top = self.fig_plot.add_subplot(gs[0, 0])
         self.ax_main = self.fig_plot.add_subplot(gs[1, 0], sharex=self.ax_top)
         self.ax_right = self.fig_plot.add_subplot(gs[0:2, 1]) 
         
-        # Hide inner tick labels
         plt.setp(self.ax_top.get_xticklabels(), visible=False)
         plt.setp(self.ax_right.get_yticklabels(), visible=False)
         
-        # Invert Y axes so TVD/TVT increases downwards
         self.ax_main.invert_yaxis()
         self.ax_right.invert_yaxis()
         
-        # Top Panel
         self.line_sensed_top, = self.ax_top.plot(self.evalz['MD'], self.evalz['GR'], label='Sensed HW', color='black', linewidth=1.5)
         self.line_geo_top, = self.ax_top.plot(self.evalz['MD'], self.truth_gr_full, label='Truth TW', color='green', alpha=0.3, linewidth=2)
         self.line_pred_top, = self.ax_top.plot([], [], color='dodgerblue', linewidth=2, label='Predicted TW')
         self.scatter_anchor_top, = self.ax_top.plot([], [], 'go', markersize=8, label='Current Anchor')
         
-        # Main Panel
         self.line_traj_main, = self.ax_main.plot(self.evalz['MD'], self.evalz['TVD'], color='darkgrey', linewidth=1.0, zorder=1, label='Trajectory')
         self.line_pred_main, = self.ax_main.plot([], [], color='dodgerblue', linewidth=4, alpha=0.7, label='Active Window', zorder=3)
         
-        # Right Panel
         self.line_sensed_right, = self.ax_right.plot(self.evalz['GR'], self.evalz['TVD'], label='Sensed HW', color='black', linewidth=1.5)
         self.line_geo_right, = self.ax_right.plot(self.truth_gr_full, self.evalz['TVD'], label='Truth TW', color='green', alpha=0.3, linewidth=2)
         self.line_pred_right, = self.ax_right.plot([], [], color='dodgerblue', linewidth=2, label='Predicted TW')
@@ -139,7 +136,6 @@ class GeosteeringSimulator:
         self.history_lines_right = []
         self.history_anchors_top = []
         
-        # Formatting
         self.fig_plot.suptitle("Interactive Geosteering | Initializing...", fontsize=12, fontweight='bold')
         self.ax_top.set_ylabel("GR (API)", fontsize=10)
         self.ax_main.set_xlabel("Measured Depth (MD)", fontsize=11)
@@ -162,27 +158,22 @@ class GeosteeringSimulator:
         max_gr = max(self.evalz['GR'].max(), self.tw['GR'].max())
         self.ax_right.set_xlim(min_gr - 10, max_gr + 10)
 
-        # =========================================================================
-        # WINDOW 2: CONTROL PANEL (SLIDERS, BUTTONS, CHECKBOXES)
-        # =========================================================================
-        self.fig_ctrl = plt.figure("Geosteering Controls", figsize=(5.5, 9))
+        self.fig_ctrl = plt.figure("Geosteering Controls", figsize=(5.5, 9.5))
         self.fig_ctrl.suptitle("Geosteering Controls", fontsize=13, fontweight='bold', y=0.96)
         
         axcolor = '#e9ecef'
         initial_end = min(self.current_md_start + 200, max_md)
         
-        # --- Section 1: Parameter Sliders ---
-        self.ax_md     = self.fig_ctrl.add_axes([0.30, 0.85, 0.62, 0.035], facecolor=axcolor)
-        self.ax_m      = self.fig_ctrl.add_axes([0.30, 0.78, 0.62, 0.035], facecolor=axcolor)
-        self.ax_c      = self.fig_ctrl.add_axes([0.30, 0.71, 0.62, 0.035], facecolor=axcolor)
-        self.ax_cutoff = self.fig_ctrl.add_axes([0.30, 0.64, 0.62, 0.035], facecolor=axcolor)
+        self.ax_md     = self.fig_ctrl.add_axes([0.30, 0.85, 0.62, 0.032], facecolor=axcolor)
+        self.ax_m      = self.fig_ctrl.add_axes([0.30, 0.78, 0.62, 0.032], facecolor=axcolor)
+        self.ax_c      = self.fig_ctrl.add_axes([0.30, 0.71, 0.62, 0.032], facecolor=axcolor)
+        self.ax_cutoff = self.fig_ctrl.add_axes([0.30, 0.64, 0.62, 0.032], facecolor=axcolor)
         
         self.slider_md     = Slider(self.ax_md, 'Active End', self.current_md_start + 1, max_md, valinit=initial_end, valstep=5)
         self.slider_m      = Slider(self.ax_m, 'm (App. Dip)', -0.15, 0.15, valinit=0.0, valstep=0.001)
         self.slider_c      = Slider(self.ax_c, 'c (Offset)', -5.0, 5.0, valinit=0.0, valstep=0.1)
         self.slider_cutoff = Slider(self.ax_cutoff, 'LP Cutoff', 0.001, 0.05, valinit=HW_LOW_PASS_CUTOFF, valstep=0.001)
         
-        # --- Section 2: Action Buttons ---
         self.ax_commit = self.fig_ctrl.add_axes([0.10, 0.54, 0.25, 0.06])
         self.btn_commit = Button(self.ax_commit, 'Drop Anchor', color='lightgreen', hovercolor='palegreen')
         
@@ -192,29 +183,27 @@ class GeosteeringSimulator:
         self.ax_reset = self.fig_ctrl.add_axes([0.66, 0.54, 0.24, 0.06])
         self.btn_reset = Button(self.ax_reset, 'Reset All', color='salmon', hovercolor='lightsalmon')
         
-        # --- Section 3: Axis Toggles (MD/THL and TVD/TVT) ---
         self.ax_radio_x = self.fig_ctrl.add_axes([0.10, 0.43, 0.38, 0.08], facecolor=axcolor)
         self.ax_radio_x.set_title("X-Axis (Top & Main)", fontsize=9, pad=4, loc='left', fontweight='bold')
         self.radio_x = RadioButtons(self.ax_radio_x, ('MD', 'THL'))
         
-        self.ax_radio_y = self.fig_ctrl.add_axes([0.52, 0.43, 0.38, 0.08], facecolor=axcolor)
+        # Enhanced Y-Axis radio buttons supporting TVD, TVT, and TVT - TVD
+        self.ax_radio_y = self.fig_ctrl.add_axes([0.52, 0.41, 0.38, 0.10], facecolor=axcolor)
         self.ax_radio_y.set_title("Y-Axis (Main & Right)", fontsize=9, pad=4, loc='left', fontweight='bold')
-        self.radio_y = RadioButtons(self.ax_radio_y, ('TVD', 'TVT'))
+        self.radio_y = RadioButtons(self.ax_radio_y, ('TVD', 'TVT', 'TVT - TVD'))
 
-        # --- Section 4: Display Checkboxes ---
-        self.ax_toggles = self.fig_ctrl.add_axes([0.10, 0.28, 0.80, 0.11], facecolor='#f8f9fa')
+        self.ax_toggles = self.fig_ctrl.add_axes([0.10, 0.27, 0.80, 0.11], facecolor='#f8f9fa')
         self.ax_toggles.set_title("Layer Visibility", fontsize=9, pad=4, loc='left', fontweight='bold')
         self.toggles = CheckButtons(self.ax_toggles, ['Show Geologist Mapping', 'Show Predicted Mapping'], [True, True])
         
-        self.ax_lp_toggle = self.fig_ctrl.add_axes([0.10, 0.17, 0.80, 0.07], facecolor='#f8f9fa')
+        self.ax_lp_toggle = self.fig_ctrl.add_axes([0.10, 0.16, 0.80, 0.07], facecolor='#f8f9fa')
         self.ax_lp_toggle.set_title("Signal Processing", fontsize=9, pad=4, loc='left', fontweight='bold')
         self.lp_toggle = CheckButtons(self.ax_lp_toggle, ['Enable LP Filter'], [True])
         
-        self.ax_legend_toggle = self.fig_ctrl.add_axes([0.10, 0.06, 0.80, 0.07], facecolor='#f8f9fa')
+        self.ax_legend_toggle = self.fig_ctrl.add_axes([0.10, 0.05, 0.80, 0.07], facecolor='#f8f9fa')
         self.ax_legend_toggle.set_title("Display Options", fontsize=9, pad=4, loc='left', fontweight='bold')
         self.legend_toggle = CheckButtons(self.ax_legend_toggle, ['Show Legends'], [True])
 
-        # --- Bind Callbacks & Events ---
         self.ax_main.callbacks.connect('ylim_changed', self.sync_y_from_main)
         self.ax_right.callbacks.connect('ylim_changed', self.sync_y_from_right)
         
@@ -237,7 +226,6 @@ class GeosteeringSimulator:
         self.lp_toggle.on_clicked(self.toggle_lp_filter)
         self.legend_toggle.on_clicked(self.toggle_legends)
         
-        # --- Init Sync and Axis Limits ---
         self.fig_plot.canvas.draw()
         
         min_tvd, max_tvd = self.evalz['TVD'].min(), self.evalz['TVD'].max()
@@ -256,12 +244,10 @@ class GeosteeringSimulator:
         self.top_axis_mode = label
         x_data = self.evalz[label]
         
-        # Update base lines
         self.line_sensed_top.set_xdata(x_data)
         self.line_geo_top.set_xdata(x_data)
         self.line_traj_main.set_xdata(x_data)
         
-        # Update committed chunks
         for i, chunk in enumerate(self.chunks):
             mask = (self.evalz['MD'] >= chunk['md_start']) & (self.evalz['MD'] <= chunk['md_end'])
             c_data = self.evalz[mask]
@@ -269,7 +255,6 @@ class GeosteeringSimulator:
             self.history_anchors_top[i].set_xdata([c_data[label].iloc[-1]])
             self.history_lines_main[i].set_xdata(c_data[label])
             
-        # Update bounds and labels
         min_x, max_x = x_data.min(), x_data.max()
         self.ax_top.set_xlim(min_x - 50, max_x + 50)
         
@@ -279,24 +264,39 @@ class GeosteeringSimulator:
         self.update_plot(None)
 
     def toggle_y_axis(self, label):
-        """Swaps both the Main cross-section and Right correlation panel between TVD and TVT"""
+        """Swaps both the Main cross-section and Right correlation panel between TVD, TVT, and TVT - TVD"""
         self.right_axis_mode = label
         
         if label == 'TVT':
-            # In TVT Mode, update main graph y-axis and map curves to True Vertical Thickness
             self.ax_main.set_ylabel("True Vertical Thickness (TVT)", fontsize=11)
             self.line_geo_right.set_data(self.tw['GR'], self.tw['TVT'])
             self.line_sensed_right.set_label('Predicted HW TVT')
             self.line_traj_main.set_label('Predicted Trajectory')
             
-            # Set Y bounds specifically for TVT range across both main and right panels
             min_y, max_y = self.tw['TVT'].min(), self.tw['TVT'].max()
             buffer_y = abs(max_y - min_y) * 0.05
             if buffer_y == 0: buffer_y = 10
-            self.ax_main.set_ylim(max_y + buffer_y, min_y - buffer_y) # TVT increases downwards
+            self.ax_main.set_ylim(max_y + buffer_y, min_y - buffer_y)
             self.ax_right.set_ylim(max_y + buffer_y, min_y - buffer_y)
-            
             self.ax_right.set_title("Correlation Panel (TVT)", fontsize=10)
+            
+        elif label == 'TVT - TVD':
+            # Streaming Chunk / Offset Mode representing TVT minus TVD difference
+            self.ax_main.set_ylabel("TVT - TVD (Stratigraphic Offset)", fontsize=11)
+            self.line_geo_right.set_data(self.tw['GR'], self.tw['TVT'].iloc[:len(self.evalz)])
+            self.line_sensed_right.set_label('HW TVT - TVD')
+            self.line_traj_main.set_label('Trajectory Offset')
+            
+            # Calculate TVT - TVD array across evaluation points
+            current_tvt = self.get_current_tvt_array(self.slider_md.val, self.slider_m.val, self.slider_c.val)
+            tvt_minus_tvd = current_tvt - self.evalz['TVD']
+            
+            min_y, max_y = np.nanmin(tvt_minus_tvd), np.nanmax(tvt_minus_tvd)
+            buffer_y = abs(max_y - min_y) * 0.05
+            if buffer_y == 0: buffer_y = 10
+            self.ax_main.set_ylim(max_y + buffer_y, min_y - buffer_y)
+            self.ax_right.set_ylim(max_y + buffer_y, min_y - buffer_y)
+            self.ax_right.set_title("Correlation Panel (TVT - TVD)", fontsize=10)
             
         else: # TVD Mode
             self.ax_main.set_ylabel("True Vertical Depth (TVD)", fontsize=11)
@@ -309,30 +309,34 @@ class GeosteeringSimulator:
             self.ax_main.set_ylim(max_tvd + buffer_tvd, min_tvd - buffer_tvd)
             
             self.ax_right.set_title("Correlation Panel (TVD)", fontsize=10)
-            self.sync_y_from_main() # Snap back to Cross-Section's TVD bounds
+            self.sync_y_from_main()
             
             self.line_sensed_right.set_label('Sensed HW')
             self.line_traj_main.set_label('Trajectory')
             
-        # Refresh legends to show updated labels context
         vis = self.legend_toggle.get_status()[0]
         if self.ax_main.get_legend(): 
             self.ax_main.legend(loc='upper right', fontsize=8).set_visible(vis)
         if self.ax_right.get_legend(): 
             self.ax_right.legend(loc='upper right', fontsize=8).set_visible(vis)
             
-        # Update committed historical chunks for both main and right panels
         for i, chunk in enumerate(self.chunks):
             mask = (self.evalz['MD'] >= chunk['md_start']) & (self.evalz['MD'] <= chunk['md_end'])
             c_data = self.evalz[mask]
             if label == 'TVD':
                 self.history_lines_main[i].set_ydata(c_data['TVD'])
                 self.history_lines_right[i].set_ydata(c_data['TVD'])
-            else: 
+            elif label == 'TVT':
                 norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
                 tvt_seg = chunk['m'] * (c_data['MD'] - chunk['md_start']) - norm_z_shift + chunk['tvt_0'] + chunk['c']
                 self.history_lines_main[i].set_ydata(tvt_seg)
                 self.history_lines_right[i].set_ydata(tvt_seg)
+            else: # TVT - TVD
+                norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
+                tvt_seg = chunk['m'] * (c_data['MD'] - chunk['md_start']) - norm_z_shift + chunk['tvt_0'] + chunk['c']
+                diff_seg = tvt_seg - c_data['TVD']
+                self.history_lines_main[i].set_ydata(diff_seg)
+                self.history_lines_right[i].set_ydata(diff_seg)
                 
         self.update_plot(None)
 
@@ -366,13 +370,11 @@ class GeosteeringSimulator:
         
         scale_factor = 1.15 ** (-event.step)
         
-        # Zoom X
         x_min, x_max = ax.get_xlim()
         x_range = (x_max - x_min) * scale_factor
         x_ratio = (event.xdata - x_min) / (x_max - x_min)
         ax.set_xlim(event.xdata - x_range * x_ratio, event.xdata + x_range * (1 - x_ratio))
         
-        # Zoom Y
         y_min, y_max = ax.get_ylim()
         y_range = (y_max - y_min) * scale_factor
         y_ratio = (event.ydata - y_min) / (y_max - y_min)
@@ -464,21 +466,18 @@ class GeosteeringSimulator:
         """Constructs a real-time TVT mapping array for the entire well based on active predictions"""
         tvt_arr = np.full(len(self.evalz), np.nan)
         
-        # 1. Map established chunks
         for chunk in self.chunks:
             mask = (self.evalz['MD'] >= chunk['md_start']) & (self.evalz['MD'] <= chunk['md_end'])
             c_data = self.evalz[mask]
             norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
             tvt_arr[mask] = chunk['m'] * (c_data['MD'] - chunk['md_start']) - norm_z_shift + chunk['tvt_0'] + chunk['c']
             
-        # 2. Map active sliding prediction window
         active_mask = (self.evalz['MD'] >= self.current_md_start) & (self.evalz['MD'] <= active_md_end)
         if np.any(active_mask):
             c_data = self.evalz[active_mask]
             norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
             tvt_arr[active_mask] = active_m * (c_data['MD'] - self.current_md_start) - norm_z_shift + self.current_tvt_0 + active_c
         
-        # 3. Forecast unmapped future data based on last mapped trajectory
         unmapped_mask = (self.evalz['MD'] > active_md_end)
         if np.any(unmapped_mask):
             c_data = self.evalz[unmapped_mask]
@@ -503,7 +502,6 @@ class GeosteeringSimulator:
             self.current_cutoff = active_cutoff
             self._apply_gr_filter()
         
-        # --- Calculate History Metrics ---
         hist_tvt_corr, hist_tvt_rmse = 0.0, 0.0
         hist_gr_corr, hist_gr_rmse = 0.0, 0.0
         
@@ -534,7 +532,6 @@ class GeosteeringSimulator:
             full_hist_pred_gr = np.concatenate(hist_pred_gr_list)
             hist_gr_corr, hist_gr_rmse = self._calculate_metrics(full_hist_sensed_gr, full_hist_pred_gr)
         
-        # --- Evaluate Active Chunk ---
         valid_mask = (self.evalz['MD'] >= self.current_md_start) & (self.evalz['MD'] <= active_md_end)
         active_data = self.evalz[valid_mask]
         
@@ -544,21 +541,27 @@ class GeosteeringSimulator:
         if len(active_data) > 0:
             active_norm_Z = active_data['norm_Z'] - active_data['norm_Z'].iloc[0]
             active_tvt = active_m * (active_data['MD'] - self.current_md_start) - active_norm_Z + self.current_tvt_0 + active_c
-            
             active_pred_gr = np.interp(active_tvt, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
             
-            # --- Update Active Lines mapped to Current Axis Settings ---
             active_x_data = active_data[self.top_axis_mode]
             self.line_pred_top.set_data(active_x_data, active_pred_gr)
             self.scatter_anchor_top.set_data([active_x_data.iloc[0]], [active_pred_gr[0]])
             
+            current_tvt_full = self.get_current_tvt_array(active_md_end, active_m, active_c)
+            
             if self.right_axis_mode == 'TVT':
-                current_tvt_full = self.get_current_tvt_array(active_md_end, active_m, active_c)
                 self.line_traj_main.set_ydata(current_tvt_full)
                 self.line_pred_main.set_data(active_x_data, active_tvt)
                 self.line_sensed_right.set_ydata(current_tvt_full)
                 self.line_pred_right.set_data(active_pred_gr, active_tvt)
-            else:
+            elif self.right_axis_mode == 'TVT - TVD':
+                tvt_minus_tvd_full = current_tvt_full - self.evalz['TVD']
+                active_tvt_minus_tvd = active_tvt - active_data['TVD']
+                self.line_traj_main.set_ydata(tvt_minus_tvd_full)
+                self.line_pred_main.set_data(active_x_data, active_tvt_minus_tvd)
+                self.line_sensed_right.set_ydata(tvt_minus_tvd_full)
+                self.line_pred_right.set_data(active_pred_gr, active_tvt_minus_tvd)
+            else: # TVD
                 self.line_traj_main.set_ydata(self.evalz['TVD'])
                 self.line_pred_main.set_data(active_x_data, active_data['TVD'])
                 self.line_sensed_right.set_ydata(self.evalz['TVD'])
@@ -568,19 +571,19 @@ class GeosteeringSimulator:
                 active_tvt_corr, active_tvt_rmse = self._calculate_metrics(active_data['TVT'], active_tvt)
             active_gr_corr, active_gr_rmse = self._calculate_metrics(active_data['GR'], active_pred_gr)
             
-        # Update Main Window Title with RMSE/Correlation Metrics
         title_str = "Interactive Geosteering Mode (Use Trackpad or Right-Click to Pan/Zoom)\n"
         if self.chunks:
-            title_str += f"Hist    |   TVT: R={hist_tvt_corr:.3f}, RMSE={hist_tvt_rmse:.2f} ft   ||   GR: R={hist_gr_corr:.3f}, RMSE={hist_gr_rmse:.2f} API\n"
+            title_str += f"Hist    |    TVT: R={hist_tvt_corr:.3f}, RMSE={hist_tvt_rmse:.2f} ft    ||    GR: R={hist_gr_corr:.3f}, RMSE={hist_gr_rmse:.2f} API\n"
         else:
-            title_str += "Hist    |   No chunks committed yet\n"
+            title_str += "Hist    |    No chunks committed yet\n"
         if len(active_data) > 0:
-            title_str += f"Active |   TVT: R={active_tvt_corr:.3f}, RMSE={active_tvt_rmse:.2f} ft   ||   GR: R={active_gr_corr:.3f}, RMSE={active_gr_rmse:.2f} API"
+            title_str += f"Active |    TVT: R={active_tvt_corr:.3f}, RMSE={active_tvt_rmse:.2f} ft    ||    GR: R={active_gr_corr:.3f}, RMSE={active_gr_rmse:.2f} API"
             
         self.fig_plot.suptitle(title_str, fontsize=11, fontweight='bold')
         self.fig_plot.canvas.draw_idle()
         
     def commit_chunk(self, event):
+        """Commits the active geosteering prediction window and locks it into history"""
         active_md_end = self.slider_md.val
         active_m = self.slider_m.val
         active_c = self.slider_c.val
@@ -588,119 +591,106 @@ class GeosteeringSimulator:
         valid_mask = (self.evalz['MD'] >= self.current_md_start) & (self.evalz['MD'] <= active_md_end)
         active_data = self.evalz[valid_mask]
         
+        if len(active_data) == 0:
+            return
+            
         active_norm_Z = active_data['norm_Z'] - active_data['norm_Z'].iloc[0]
         active_tvt = active_m * (active_data['MD'] - self.current_md_start) - active_norm_Z + self.current_tvt_0 + active_c
-        active_pred_gr = np.interp(active_tvt, self.tw['TVT'], self.tw['GR'], left=np.nan, right=np.nan)
         
-        vis = self.line_pred_top.get_visible()
-        
-        # Plot lines respecting current axis mode
-        x_data_active = active_data[self.top_axis_mode]
-        l_top, = self.ax_top.plot(x_data_active, active_pred_gr, color='navy', alpha=0.7, linewidth=1.5, visible=vis)
-        
-        if self.right_axis_mode == 'TVT':
-            l_main, = self.ax_main.plot(x_data_active, active_tvt, color='navy', alpha=0.7, linewidth=4, visible=vis)
-            l_right, = self.ax_right.plot(active_pred_gr, active_tvt, color='navy', alpha=0.7, linewidth=1.5, visible=vis)
-        else:
-            l_main, = self.ax_main.plot(x_data_active, active_data['TVD'], color='navy', alpha=0.7, linewidth=4, visible=vis)
-            l_right, = self.ax_right.plot(active_pred_gr, active_data['TVD'], color='navy', alpha=0.7, linewidth=1.5, visible=vis)
-            
-        anchor, = self.ax_top.plot([x_data_active.iloc[-1]], [active_pred_gr[-1]], 'bo', markersize=6, visible=vis)
-        
-        self.history_lines_top.append(l_top)
-        self.history_lines_main.append(l_main)
-        self.history_lines_right.append(l_right)
-        self.history_anchors_top.append(anchor)
-        
-        self.chunks.append({
+        chunk = {
             'md_start': self.current_md_start,
             'md_end': active_md_end,
             'm': active_m,
             'c': active_c,
             'tvt_0': self.current_tvt_0
-        })
+        }
+        self.chunks.append(chunk)
         
+        # Plot historical committed lines
+        x_data = active_data[self.top_axis_mode]
+        if self.right_axis_mode == 'TVT':
+            y_data = active_tvt
+        elif self.right_axis_mode == 'TVT - TVD':
+            y_data = active_tvt - active_data['TVD']
+        else:
+            y_data = active_data['TVD']
+            
+        line_top, = self.ax_top.plot(x_data, np.interp(active_tvt, self.tw['TVT'], self.tw['GR']), color='orange', linewidth=2, alpha=0.8)
+        line_main, = self.ax_main.plot(x_data, y_data, color='orange', linewidth=3, alpha=0.8)
+        line_right, = self.ax_right.plot(np.interp(active_tvt, self.tw['TVT'], self.tw['GR']), y_data, color='orange', linewidth=2, alpha=0.8)
+        anchor_top, = self.ax_top.plot([x_data.iloc[-1]], [np.interp(active_tvt.iloc[-1], self.tw['TVT'], self.tw['GR'])], 'ro', markersize=6)
+        
+        self.history_lines_top.append(line_top)
+        self.history_lines_main.append(line_main)
+        self.history_lines_right.append(line_right)
+        self.history_anchors_top.append(anchor_top)
+        
+        # Advance anchor start for next chunk
         self.current_md_start = active_md_end
         self.current_tvt_0 = active_tvt.iloc[-1]
         
         # Reset sliders for next segment
-        self.slider_md.valinit = min(self.current_md_start + 200, self.evalz['MD'].max())
-        self.slider_md.reset()
-        self.slider_md.valmin = self.current_md_start
-        self.slider_md.ax.set_xlim(self.current_md_start, self.evalz['MD'].max())
-        
-        self.slider_m.reset()
-        self.slider_c.reset()
+        self.slider_md.valmin = self.current_md_start + 1
+        self.slider_md.set_val(min(self.current_md_start + 200, self.evalz['MD'].max()))
+        self.slider_m.set_val(0.0)
+        self.slider_c.set_val(0.0)
         
         self.update_plot(None)
-        
+
     def undo_chunk(self, event):
+        """Undoes the last committed prediction chunk"""
         if not self.chunks:
             return
             
-        # Pop chunk data
         self.chunks.pop()
+        line_top = self.history_lines_top.pop()
+        line_main = self.history_lines_main.pop()
+        line_right = self.history_lines_right.pop()
+        anchor_top = self.history_anchors_top.pop()
         
-        # Remove graphical elements
-        self.history_lines_top.pop().remove()
-        self.history_lines_main.pop().remove()
-        self.history_lines_right.pop().remove()
-        self.history_anchors_top.pop().remove()
+        line_top.remove()
+        line_main.remove()
+        line_right.remove()
+        anchor_top.remove()
         
         if self.chunks:
             last_chunk = self.chunks[-1]
             self.current_md_start = last_chunk['md_end']
-            
-            # Recalculate tvt_0 based on the modified final state of the previous chunk
             mask = (self.evalz['MD'] >= last_chunk['md_start']) & (self.evalz['MD'] <= last_chunk['md_end'])
             c_data = self.evalz[mask]
-            norm_z_shift = c_data['norm_Z'].iloc[-1] - c_data['norm_Z'].iloc[0]
-            self.current_tvt_0 = last_chunk['m'] * (last_chunk['md_end'] - last_chunk['md_start']) - norm_z_shift + last_chunk['tvt_0'] + last_chunk['c']
+            norm_z_shift = c_data['norm_Z'] - c_data['norm_Z'].iloc[0]
+            tvt_seg = last_chunk['m'] * (c_data['MD'] - last_chunk['md_start']) - norm_z_shift + last_chunk['tvt_0'] + last_chunk['c']
+            self.current_tvt_0 = tvt_seg.iloc[-1]
         else:
             self.current_md_start = self.evalz['MD'].iloc[0]
-            self.current_tvt_0 = self.evalz['TVT'].iloc[0] if 'TVT' in self.evalz.columns else 0.0
+            self.current_tvt_0 = self.evalz['TVT'].iloc[0] if 'TVT' in self.evalz.columns else 1000.0
             
-        # Reset sliders for next segment
-        self.slider_md.valmin = self.current_md_start
-        self.slider_md.ax.set_xlim(self.current_md_start, self.evalz['MD'].max())
-        self.slider_md.valinit = min(self.current_md_start + 200, self.evalz['MD'].max())
-        self.slider_md.reset()
-        
-        self.slider_m.reset()
-        self.slider_c.reset()
-        
+        self.slider_md.valmin = self.current_md_start + 1
         self.update_plot(None)
-        
+
     def reset_all(self, event):
-        self.chunks = []
+        """Resets all simulation chunks and sliders back to initial state"""
+        for line in self.history_lines_top: line.remove()
+        for line in self.history_lines_main: line.remove()
+        for line in self.history_lines_right: line.remove()
+        for anchor in self.history_anchors_top: anchor.remove()
+        
+        self.chunks.clear()
+        self.history_lines_top.clear()
+        self.history_lines_main.clear()
+        self.history_lines_right.clear()
+        self.history_anchors_top.clear()
+        
         self.current_md_start = self.evalz['MD'].iloc[0]
-        self.current_tvt_0 = self.evalz['TVT'].iloc[0] if 'TVT' in self.evalz.columns else 0.0
+        self.current_tvt_0 = self.evalz['TVT'].iloc[0] if 'TVT' in self.evalz.columns else 1000.0
         
-        for l in self.history_lines_top: l.remove()
-        for l in self.history_lines_main: l.remove()
-        for l in self.history_lines_right: l.remove()
-        for a in self.history_anchors_top: a.remove()
+        self.slider_md.valmin = self.current_md_start + 1
+        self.slider_md.set_val(min(self.current_md_start + 200, self.evalz['MD'].max()))
+        self.slider_m.set_val(0.0)
+        self.slider_c.set_val(0.0)
         
-        self.history_lines_top = []
-        self.history_lines_main = []
-        self.history_lines_right = []
-        self.history_anchors_top = []
-        
-        self.slider_md.valmin = self.current_md_start
-        self.slider_md.ax.set_xlim(self.current_md_start, self.evalz['MD'].max())
-        self.slider_md.valinit = min(self.current_md_start + 200, self.evalz['MD'].max())
-        self.slider_md.reset()
-        self.slider_m.reset()
-        self.slider_c.reset()
-        
-        self.ax_top.set_xlim(self.initial_xlim)
-        self.ax_main.set_ylim(self.initial_ylim)
         self.update_plot(None)
 
 if __name__ == '__main__':
-    print("Launching Interactive Geosteering Mode...")
-    print("Controls:")
-    print("  - Use Mouse Middle/Right click to Pan.")
-    print("  - Use Scroll Wheel to Zoom in/out at the cursor location.")
-    print("  - Check out the brand-new Dynamic Axis Toggles.")
+    print("Launching Interactive Geosteering Mode with TVT - TVD Y-Axis Support...")
     simulator = GeosteeringSimulator(evalz, tw)
