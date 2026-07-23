@@ -21,7 +21,7 @@ def remove_rotation_noise(gr_series, cutoff):
     b, a = butter(1, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, gr_filled)
 
-well = '7bb17b96'
+well = '276b012a'
 
 try:
     hw = pd.read_csv(train_data + f"/{well}__horizontal_well.csv")
@@ -45,8 +45,6 @@ tw_mean, tw_std = np.mean(tw_gr_calib), np.std(tw_gr_calib)
 evalz = hw[mask].copy()
 evalz['GR_raw'] = (evalz['GR'].copy() - hw_mean) / hw_std * tw_std + tw_mean
 
-
-
 fill = lambda df: df.interpolate(method='linear', limit_direction='both')
 d = lambda df: fill(df).diff().rolling(11, center=True, min_periods=1).mean()
 
@@ -56,7 +54,7 @@ pred = evalz['Z'] - evalz['MD'] * slope - intercept
 evalz['norm_Z'] = pred - pred.iloc[0] 
 
 # Keep a raw copy of GR to allow dynamic filtering via slider
-evalz['GR_raw'] = evalz['GR'].copy()
+# evalz['GR_raw'] = evalz['GR'].copy()
 evalz['GR'] = remove_rotation_noise(evalz['GR_raw'], cutoff=HW_LOW_PASS_CUTOFF)
 
 # STARSTEER STANDARD: TVD increases downwards, so TVD = -Z
@@ -163,7 +161,7 @@ class StarSteerSimulator:
         self.ax_cutoff = plt.axes([0.10, 0.11, 0.40, 0.03], facecolor=axcolor)
         
         self.slider_md = Slider(self.ax_md, 'Active MD End', self.current_md_start + 1, max_md, valinit=initial_end, valstep=5)
-        self.slider_m = Slider(self.ax_m, 'm (Apparent Dip)', -0.05, 0.05, valinit=0.0, valstep=0.001)
+        self.slider_m = Slider(self.ax_m, 'm (Apparent Dip)', -0.15, 0.15, valinit=0.0, valstep=0.001)
         self.slider_c = Slider(self.ax_c, 'c (Fault Offset)', -5.0, 5.0, valinit=0.0, valstep=0.1)
         self.slider_cutoff = Slider(self.ax_cutoff, 'GR LP Cutoff', 0.001, 0.05, valinit=HW_LOW_PASS_CUTOFF, valstep=0.001)
         
