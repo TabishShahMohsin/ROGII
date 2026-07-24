@@ -7,7 +7,6 @@ from scipy.signal import butter, filtfilt
 from scipy.stats import pearsonr
 import warnings
 warnings.filterwarnings('ignore')
-import sys
 
 # --- 1. DATA PREPARATION ---
 IS_KAGGLE = os.path.exists('/kaggle/input')
@@ -22,8 +21,7 @@ def remove_rotation_noise(gr_series, cutoff):
     b, a = butter(1, normal_cutoff, btype='low', analog=False)
     return filtfilt(b, a, gr_filled)
 
-well = '1b1eba53'
-well = sys.argv[1] if len(sys.argv) > 1 else well
+well = '276b012a'
 
 try:
     hw = pd.read_csv(os.path.join(train_data, f"{well}__horizontal_well.csv"))
@@ -294,20 +292,31 @@ class GeosteeringSimulator:
         elif label == 'TVT - TVD':
             # Streaming Chunk / Offset Mode representing TVT minus TVD difference
             self.ax_main.set_ylabel("TVT - TVD (Stratigraphic Offset)", fontsize=11)
-            self.line_geo_right.set_data(self.tw['GR'], self.tw['TVT'].iloc[:len(self.evalz)])
             self.line_sensed_right.set_label('HW TVT - TVD')
             self.line_traj_main.set_label('Trajectory Offset')
+            
             if 'TVT' in self.evalz.columns:
-                self.line_true_main.set_data(self.evalz[self.top_axis_mode], self.evalz['TVT'] - self.evalz['TVD'])
+                true_offset = self.evalz['TVT'] - self.evalz['TVD']
+                # Correctly map Truth Typewell GR and offset to match trajectory domain
+                self.line_geo_right.set_data(self.truth_gr_full, true_offset)
+                self.line_true_main.set_data(self.evalz[self.top_axis_mode], true_offset)
                 self.line_true_main.set_visible(geo_vis)
+                self.line_geo_right.set_visible(geo_vis)
             else:
                 self.line_true_main.set_visible(False)
+                self.line_geo_right.set_visible(False)
             
             # Calculate TVT - TVD array across evaluation points
             current_tvt = self.get_current_tvt_array(self.slider_md.val, self.slider_m.val, self.slider_c.val)
             tvt_minus_tvd = current_tvt - self.evalz['TVD']
             
-            min_y, max_y = np.nanmin(tvt_minus_tvd), np.nanmax(tvt_minus_tvd)
+            # Include true offset in axis limits so both prediction and ground truth fit in view
+            if 'TVT' in self.evalz.columns:
+                all_offsets = np.concatenate([tvt_minus_tvd, true_offset])
+            else:
+                all_offsets = tvt_minus_tvd
+                
+            min_y, max_y = np.nanmin(all_offsets), np.nanmax(all_offsets)
             buffer_y = abs(max_y - min_y) * 0.05
             if buffer_y == 0: buffer_y = 10
             self.ax_main.set_ylim(max_y + buffer_y, min_y - buffer_y)
