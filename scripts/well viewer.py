@@ -813,4 +813,8 @@ if __name__ == '__main__':
     print("   • Layer Vis  : Toggle Geologist Mapping, Predictions, and Known HW.")
     print("=" * 68)
     print(f"Launching Interactive Geosteering Application for well: {well}...")
+    print("💡 Ideas Left to Implement:")
+    print("   • Showing GR from near by wells")
+    print("   • Adding GR baseline shift")
+    print("   • Should be able to turn on and off prediction from each of the wells")
     simulator = GeosteeringSimulator(evalz, tw, known_hw=known_hw)

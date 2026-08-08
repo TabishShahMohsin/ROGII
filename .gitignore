@@ -1,7 +1,9 @@
 data/
 videos/
+models/
 anaconda_projects/
 .virtual_documents/
+.vscode/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
