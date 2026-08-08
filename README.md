@@ -8,7 +8,7 @@ Checkout the scripts for what I was able to break the problem to.
 * Modern drilling is a remote-controlled, blindfolded 3D underground navigation. Modern rigs use steerable drill bits.
 * A "horizontal well" starts by drilling vertically, but then gets curved and is maintained horizontally into the most oil yeilding layer. Keeping the TVT constant. (Z may change)
 * Hence an **L-Profile.**, also called as a **Horizontal Well**. [Video on Profiles.](https://www.youtube.com/watch?v=Xr_kSHJguTM&t=167s)
-* Data is such that the layers including the ground surface are exactly **parallel surfaces**.
+* Data is such that the layers including the a surface are exactly **parallel surfaces**.
     * Almost parallel planes.
 * `Purpose`: Maintaining TVT to be constant. (Geosteering)
 * `Objective`: Making a model for predicting current TVT.
@@ -37,8 +37,9 @@ To Predict:
     * Know that ground surface isn't perpendicular to Z.
 
 
-Citations:
-* [ROGGI-Software Guide](https://rogii.com/products/starsteer#:~:text=Compare%20wells%20and%20isopachs%20using,Subsurface%20Geological%20Mapping)
+Sources:
+* [ROGII-Software Guide](https://rogii.com/products/starsteer#:~:text=Compare%20wells%20and%20isopachs%20using,Subsurface%20Geological%20Mapping)
+* [Kaggle's ROGII - Wellbore Geology Prediction Competition](https://www.kaggle.com/competitions/rogii-wellbore-geology-prediction)
 
 ## 🗺 Well Map
 (python /scripts/map_viewer.py <well_name>)
@@ -50,16 +51,10 @@ A program for XY well plot, analyzing 3D proximity and parallelism, and projecti
 
 A geosteering program with GR correlation, noise filtering, chunk-based anchoring, and multi-axis view support (TVD, TVT, and stratigraphic offset).
 
-Ideas for scripts:
-* Showing GR from the known hw
-* Showing GR from near by wells
-* Adding GR baseline shift
-* Should be able to turn on and off prediction from each of the wells
-
 ## Weird wells:
-* Geo's Mistakes:
+* Geologist Mistakes:
     * d7eb0be8
-* 3 paths not found in phys pipeline
+* At least 3 paths not found in phys pipeline
     * fba7683c
 * Closest start point to its start is about 18000 m away.
     * 059c8f24
