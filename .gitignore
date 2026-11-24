@@ -224,3 +224,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# large local artifacts (not source)
+_xfer/
+_claude_xfer/
+nerf_signal_match/_cache/
+*.npz
+*.tgz
