@@ -1,0 +1,7 @@
+[
+ {"tag": "final_f0_s0", "config": {"fold": 0, "seed": 0}},
+ {"tag": "final_f1_s0", "config": {"fold": 1, "seed": 0}},
+ {"tag": "final_f2_s0", "config": {"fold": 2, "seed": 0}},
+ {"tag": "final_f3_s0", "config": {"fold": 3, "seed": 0}},
+ {"tag": "final_f4_s0", "config": {"fold": 4, "seed": 0}}
+]

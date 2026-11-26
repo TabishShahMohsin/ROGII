@@ -1,0 +1,92 @@
+[
+ {
+  "tag": "legacy_f0_s0",
+  "config": {
+   "scaling": "legacy",
+   "fold": 0,
+   "seed": 0,
+   "tag": "legacy"
+  }
+ },
+ {
+  "tag": "legacy_f1_s0",
+  "config": {
+   "scaling": "legacy",
+   "fold": 1,
+   "seed": 0,
+   "tag": "legacy"
+  }
+ },
+ {
+  "tag": "legacy_f2_s0",
+  "config": {
+   "scaling": "legacy",
+   "fold": 2,
+   "seed": 0,
+   "tag": "legacy"
+  }
+ },
+ {
+  "tag": "legacy_f3_s0",
+  "config": {
+   "scaling": "legacy",
+   "fold": 3,
+   "seed": 0,
+   "tag": "legacy"
+  }
+ },
+ {
+  "tag": "legacy_f4_s0",
+  "config": {
+   "scaling": "legacy",
+   "fold": 4,
+   "seed": 0,
+   "tag": "legacy"
+  }
+ },
+ {
+  "tag": "batchloss_f0_s0",
+  "config": {
+   "loss_norm": "batch",
+   "fold": 0,
+   "seed": 0,
+   "tag": "batchloss"
+  }
+ },
+ {
+  "tag": "batchloss_f1_s0",
+  "config": {
+   "loss_norm": "batch",
+   "fold": 1,
+   "seed": 0,
+   "tag": "batchloss"
+  }
+ },
+ {
+  "tag": "batchloss_f2_s0",
+  "config": {
+   "loss_norm": "batch",
+   "fold": 2,
+   "seed": 0,
+   "tag": "batchloss"
+  }
+ },
+ {
+  "tag": "batchloss_f3_s0",
+  "config": {
+   "loss_norm": "batch",
+   "fold": 3,
+   "seed": 0,
+   "tag": "batchloss"
+  }
+ },
+ {
+  "tag": "batchloss_f4_s0",
+  "config": {
+   "loss_norm": "batch",
+   "fold": 4,
+   "seed": 0,
+   "tag": "batchloss"
+  }
+ }
+]

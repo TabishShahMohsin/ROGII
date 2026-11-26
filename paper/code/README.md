@@ -1,69 +1,58 @@
-# Soft segment-Viterbi for TVT prediction: code
+# Soft segment-Viterbi (SSV) for TVT prediction
 
-Author: Tabish Shah Mohsin. Data: Kaggle "ROGII – Wellbore Geology Prediction".
+Code for *Learning the segment cost of a differentiable segment-Viterbi for true vertical thickness prediction in
+horizontal wells* (Al-Fakih and Shah Mohsin). Data: Kaggle competition
+[ROGII – Wellbore Geology Prediction](https://www.kaggle.com/competitions/rogii-wellbore-geology-prediction).
 
-## Files
+## Layout
 
-| File | Role |
+| Path | Content |
 |---|---|
-| `common.py` | Loads the train wells, defines the 5-fold split (sorted well names, permutation seed 42, index mod 5), and builds the fold-safe neighbour field for every training well (`nbf.pkl`). |
-| `field3.py` | Neighbour structure field. Takes along-track dip observations of S = TVT + Z from labelled support wells, plus the query well's own build section. Solves a weighted least-squares fit for the local map-view gradient, with one robust reweighting pass, then integrates the gradient along the query trajectory. |
-| `lat.py` | Lattice construction. Detrends the lateral into S space, places chunk boundaries every 80 rows (1 row = 1 ft MD), and puts anchors on a 1 ft grid within ±0.05·distance (cap ±100 ft) of the straight baseline. |
-| `vsoft.py` | Model and training: segment features, cost network, soft Viterbi (forward–backward with softmin), MSE loss on TVT, hard Viterbi decode, training loop. Also contains the variants used in the ablations (`big`, `map`). |
-| `vana.py` | Error analysis: per-well RMSE, share of squared error, error by position along the lateral, and plots. |
-| `kbest.py` | Distinct alternative Viterbi paths (min-marginal paths more than 4 ft apart) and the best-of-k oracle. |
-| `vpred.py` | Test-time prediction. Builds the neighbour field from all training wells, runs the hard Viterbi path, and writes `submission.csv`. |
+| `ssv/config.py` | every setting, with the measurement that motivates it |
+| `ssv/data.py` | reading the competition files; the 5-fold split (sorted names, permutation seed 42, position mod 5) |
+| `ssv/field.py`, `ssv/neighbours.py` | neighbour structure field and the fold-safe neighbour inputs |
+| `ssv/features.py` | detrended lattice coordinate, reference GR (typewell + own known section), raw inputs of every candidate segment |
+| `ssv/model.py` | standardization constants, segment-cost and transition networks, lattice cost assembly, decoding |
+| `ssv/dp.py` | second-order soft (forward-backward with soft-min) and hard segment-Viterbi; brute-force reference |
+| `ssv/train.py` | training on one fold (`fold=-1`: all wells) |
+| `ssv/predict.py` | test prediction with one or several models, `submission.csv` |
+| `ssv/evaluate.py` | pooled RMSE, per-well errors, error concentration, error along the lateral, out-of-fold summary |
+| `ssv/baselines.py` | hold-TVT, trend, neighbour field, lattice oracle, hand-crafted-cost Viterbi |
+| `analysis/` | data analyses and figures of Section 3 of the paper |
+| `kaggle/build_notebook.py` | builds self-contained Kaggle notebooks (training, evaluation, submission) |
+| `tests/` | DP vs brute force; lattice alignment; input scaling; loss weighting |
 
-## Environment
-
-Python 3.11+, with numpy, pandas, scipy, torch (CPU is enough) and matplotlib.
-
-## Data location
-
-Point `ROGII_DATA` at the competition folder, which holds `train/`, `test/` and `sample_submission.csv`. On Kaggle the path `/kaggle/input/competitions/rogii-wellbore-geology-prediction` is detected automatically.
-
-The scripts also read these environment variables:
-
-| Variable | Meaning | Default |
-|---|---|---|
-| `NBP` | Path of the neighbour-field cache | `/kaggle/working/nbf.pkl`; built on first import of `common.py` (about 1 minute) |
-| `CKDIR` | Checkpoint directory | |
-| `NT` | Number of torch threads | |
-
-## Reproduce the released model (fold 0)
+## Install and test
 
 ```bash
-export ROGII_DATA=/path/to/data NBP=./nbf.pkl CKDIR=./ NT=4
-python vsoft.py '{"tag":"smallnb","h":12,"ep":10,"ckpt":0,"eb":1,"ef":1,"lr":1e-3,"lrmin":0.05,"wd":1e-4,"ema":0.995,"logT0":-3,"fold":0,"skiphand":1}'
+pip install -r requirements.txt
+export ROGII_DATA=/path/to/rogii-wellbore-geology-prediction   # holds train/, test/, sample_submission.csv
+python -m pytest -q tests
 ```
 
-- **Output:** `vs_smallnb_best.pt` holds the EMA weights of the best validation epoch, and `vs_smallnb.pt` is the resumable checkpoint.
-- **Run time:** about 20 minutes per epoch on 4 CPU cores.
-- **Validation output:** each epoch prints both the soft-path and hard-path RMSE.
-
-## Evaluate, analyse, predict with the released weights (no training)
+## Train, evaluate, predict
 
 ```bash
-CFG='{"h":12,"ckpt":0,"eb":1,"ef":1,"logT0":-3,"fold":0}'
-python vana.py  "$CFG" ../weights/vs_smallnb_best.pt ./ana     # fold-0 per-well analysis (hard 6.575)
-PLOT=2d35f86d,896d15b9 python kbest.py "$CFG" ../weights/vs_smallnb_best.pt ./kb   # top-4 distinct paths
-python vpred.py "$CFG" ../weights/vs_smallnb_best.pt submission.csv                  # test prediction
+python -m ssv.train --config '{"fold": 0, "seed": 0}' --out runs/f0s0 --nb-cache nb_train.pkl
+python -m ssv.evaluate runs/f*s0/val.pkl                       # out-of-fold RMSE once all five folds are trained
+python -m ssv.predict --models runs/f*s0/model.pt --out submission.csv
+python -m ssv.baselines --out baselines.pkl --hand
 ```
 
-## Ablation configs (fold 0, `vsoft.py`)
+Any `Config` field can be set in the JSON (`ssv/config.py`). The ablations of the paper are
+`{"momentum": false}`, `{"neighbour": false}`, `{"seen": false}`, `{"position": false}`, `{"loss_norm": "batch"}`,
+`{"loss_norm": "well"}`, `{"nb_dropout": 0.3}`, `{"scaling": "legacy"}`, `{"gr": false}` (see `kaggle/make_jobs.py`).
 
-| Run | Config |
-|---|---|
-| hand cost (no learning) | Printed when `skiphand` is not set |
-| sym1 | `{"tag":"sym1","eb":1,"ef":1,"ep":6,"logT0":-3,"lr":1e-3,"fold":0,"nbch":0,"ckpt":1}` (Adam, flat learning rate) |
-| ahead8 | Same as sym1 with `"eb":0,"ef":8` |
-| smallnb | Config above |
-| big24 | `{"tag":"big24","big":1,"h":24,"ep":6,"ckpt":0,"eb":1,"ef":1,"lr":1e-3,"lrmin":0.05,"wd":1e-4,"ema":0.995,"logT0":-3,"fold":0,"skiphand":1}` |
-| map24 | `{"tag":"map24","map":1,"nl":6,"ds":4,"h":24,"ep":10,"lr":1e-3,"lrmin":0.05,"wd":1e-4,"ema":0.995,"logT0":-3,"fold":0,"skiphand":1}` |
+Training needs a GPU (about 5 minutes per epoch on one T4 for 618 wells); inference runs on a CPU.
 
-## Weights (`../weights`)
+## Kaggle
 
-- **`vs_smallnb_best.pt`:** PyTorch `state_dict` of the cost network, 1,271 parameters, fold-0 model, best epoch (9th of 10).
-  - Learned hand-cost weight w = 0.877 and temperature T = 0.049.
-  - SHA-256 is verified on export from Kaggle.
-- **`vs_smallnb.pt`:** final checkpoint (epoch 10) with optimizer state and EMA weights.
+```bash
+python kaggle/make_jobs.py                                     # writes kaggle/jobs_*.json (all runs of the paper)
+python kaggle/build_notebook.py train    kaggle/jobs_final_s0.json  train_final_s0.ipynb
+python kaggle/build_notebook.py evaluate kaggle/eval_final.json     evaluate.ipynb
+python kaggle/build_notebook.py submit   kaggle/submit_final.json   submit_final.ipynb
+```
+
+Import the notebook, add the competition data (and, for evaluation/submission, the training notebooks' outputs) as
+inputs, choose *GPU T4 x2* for training (two folds run in parallel) or no accelerator for submission, and save a version.

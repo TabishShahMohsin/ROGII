@@ -1,0 +1,7 @@
+{"final_s0": ["/kaggle/input/**/final_f*_s0/val.pkl"],
+ "final_s1": ["/kaggle/input/**/final_f*_s1/val.pkl"],
+ "final_s2": ["/kaggle/input/**/final_f*_s2/val.pkl"],
+ "nomom": ["/kaggle/input/**/nomom_f*_s0/val.pkl"],
+ "nonb": ["/kaggle/input/**/nonb_f*_s0/val.pkl"],
+ "legacy": ["/kaggle/input/**/legacy_f*_s0/val.pkl"],
+ "batchloss": ["/kaggle/input/**/batchloss_f*_s0/val.pkl"]}

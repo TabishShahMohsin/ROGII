@@ -1,0 +1,92 @@
+[
+ {
+  "tag": "noseen_f0_s0",
+  "config": {
+   "seen": false,
+   "fold": 0,
+   "seed": 0,
+   "tag": "noseen"
+  }
+ },
+ {
+  "tag": "noseen_f1_s0",
+  "config": {
+   "seen": false,
+   "fold": 1,
+   "seed": 0,
+   "tag": "noseen"
+  }
+ },
+ {
+  "tag": "nopos_f0_s0",
+  "config": {
+   "position": false,
+   "fold": 0,
+   "seed": 0,
+   "tag": "nopos"
+  }
+ },
+ {
+  "tag": "nopos_f1_s0",
+  "config": {
+   "position": false,
+   "fold": 1,
+   "seed": 0,
+   "tag": "nopos"
+  }
+ },
+ {
+  "tag": "wellloss_f0_s0",
+  "config": {
+   "loss_norm": "well",
+   "fold": 0,
+   "seed": 0,
+   "tag": "wellloss"
+  }
+ },
+ {
+  "tag": "wellloss_f1_s0",
+  "config": {
+   "loss_norm": "well",
+   "fold": 1,
+   "seed": 0,
+   "tag": "wellloss"
+  }
+ },
+ {
+  "tag": "nbdrop_f0_s0",
+  "config": {
+   "nb_dropout": 0.3,
+   "fold": 0,
+   "seed": 0,
+   "tag": "nbdrop"
+  }
+ },
+ {
+  "tag": "nbdrop_f1_s0",
+  "config": {
+   "nb_dropout": 0.3,
+   "fold": 1,
+   "seed": 0,
+   "tag": "nbdrop"
+  }
+ },
+ {
+  "tag": "nogr_f0_s0",
+  "config": {
+   "gr": false,
+   "fold": 0,
+   "seed": 0,
+   "tag": "nogr"
+  }
+ },
+ {
+  "tag": "nogr_f1_s0",
+  "config": {
+   "gr": false,
+   "fold": 1,
+   "seed": 0,
+   "tag": "nogr"
+  }
+ }
+]

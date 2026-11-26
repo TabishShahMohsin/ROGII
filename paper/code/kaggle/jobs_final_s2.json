@@ -1,0 +1,42 @@
+[
+ {
+  "tag": "final_f0_s2",
+  "config": {
+   "fold": 0,
+   "seed": 2,
+   "tag": "final"
+  }
+ },
+ {
+  "tag": "final_f1_s2",
+  "config": {
+   "fold": 1,
+   "seed": 2,
+   "tag": "final"
+  }
+ },
+ {
+  "tag": "final_f2_s2",
+  "config": {
+   "fold": 2,
+   "seed": 2,
+   "tag": "final"
+  }
+ },
+ {
+  "tag": "final_f3_s2",
+  "config": {
+   "fold": 3,
+   "seed": 2,
+   "tag": "final"
+  }
+ },
+ {
+  "tag": "final_f4_s2",
+  "config": {
+   "fold": 4,
+   "seed": 2,
+   "tag": "final"
+  }
+ }
+]

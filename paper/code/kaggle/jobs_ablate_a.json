@@ -1,0 +1,92 @@
+[
+ {
+  "tag": "nomom_f0_s0",
+  "config": {
+   "momentum": false,
+   "fold": 0,
+   "seed": 0,
+   "tag": "nomom"
+  }
+ },
+ {
+  "tag": "nomom_f1_s0",
+  "config": {
+   "momentum": false,
+   "fold": 1,
+   "seed": 0,
+   "tag": "nomom"
+  }
+ },
+ {
+  "tag": "nomom_f2_s0",
+  "config": {
+   "momentum": false,
+   "fold": 2,
+   "seed": 0,
+   "tag": "nomom"
+  }
+ },
+ {
+  "tag": "nomom_f3_s0",
+  "config": {
+   "momentum": false,
+   "fold": 3,
+   "seed": 0,
+   "tag": "nomom"
+  }
+ },
+ {
+  "tag": "nomom_f4_s0",
+  "config": {
+   "momentum": false,
+   "fold": 4,
+   "seed": 0,
+   "tag": "nomom"
+  }
+ },
+ {
+  "tag": "nonb_f0_s0",
+  "config": {
+   "neighbour": false,
+   "fold": 0,
+   "seed": 0,
+   "tag": "nonb"
+  }
+ },
+ {
+  "tag": "nonb_f1_s0",
+  "config": {
+   "neighbour": false,
+   "fold": 1,
+   "seed": 0,
+   "tag": "nonb"
+  }
+ },
+ {
+  "tag": "nonb_f2_s0",
+  "config": {
+   "neighbour": false,
+   "fold": 2,
+   "seed": 0,
+   "tag": "nonb"
+  }
+ },
+ {
+  "tag": "nonb_f3_s0",
+  "config": {
+   "neighbour": false,
+   "fold": 3,
+   "seed": 0,
+   "tag": "nonb"
+  }
+ },
+ {
+  "tag": "nonb_f4_s0",
+  "config": {
+   "neighbour": false,
+   "fold": 4,
+   "seed": 0,
+   "tag": "nonb"
+  }
+ }
+]
